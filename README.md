@@ -13,6 +13,140 @@
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
 ```
 
+---
+
+## 💻 客户端配置
+
+服务端部署完成后，脚本会输出 **短链接** 和 **Clash 配置**。下面介绍如何在 Windows 和 macOS 上使用官方 Sudoku 客户端。
+
+### Windows 客户端
+
+#### 1. 下载客户端
+
+从 [GitHub Releases](https://github.com/SUDOKU-ASCII/sudoku/releases) 下载 `sudoku-windows-amd64.zip`，解压获得 `sudoku.exe`。
+
+#### 2. 启动客户端
+
+打开 **命令提示符 (cmd)** 或 **PowerShell**，运行：
+
+```cmd
+# 使用短链接启动（推荐）
+sudoku.exe -link "sudoku://你的短链接..."
+
+# 或使用配置文件启动
+sudoku.exe -c client.json
+```
+
+客户端默认监听 `127.0.0.1:1080`（SOCKS5 + HTTP 混合代理）。
+
+#### 3. 配置系统代理
+
+**方法一：命令行设置（CMD 管理员权限）**
+
+```cmd
+:: 开启代理
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /t REG_SZ /d "127.0.0.1:1080" /f
+
+:: 关闭代理
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f
+```
+
+**方法二：PowerShell**
+
+```powershell
+# 开启代理
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable -Value 1
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyServer -Value "127.0.0.1:1080"
+
+# 关闭代理
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable -Value 0
+```
+
+**方法三：图形界面**
+
+1. 打开 **设置** → **网络和 Internet** → **代理**
+2. 关闭「自动检测设置」
+3. 在「手动设置代理」下，打开开关
+4. 填入：
+   - 地址：`127.0.0.1`
+   - 端口：`1080`
+5. 点击「保存」
+
+> 💡 **提示**：部分应用（如终端、游戏）不走系统代理，需单独配置 SOCKS5 代理或使用 Proxifier 等工具。
+
+---
+
+### macOS 客户端
+
+#### 1. 下载客户端
+
+从 [GitHub Releases](https://github.com/SUDOKU-ASCII/sudoku/releases) 下载对应版本：
+- Intel Mac: `sudoku-darwin-amd64.tar.gz`
+- Apple Silicon: `sudoku-darwin-arm64.tar.gz`
+
+解压后赋予执行权限：
+```bash
+chmod +x sudoku
+```
+
+#### 2. 启动客户端
+
+```bash
+# 使用短链接启动（推荐）
+./sudoku -link "sudoku://你的短链接..."
+
+# 或使用配置文件启动
+./sudoku -c client.json
+```
+
+客户端默认监听 `127.0.0.1:1080`（SOCKS5 + HTTP 混合代理）。
+
+#### 3. 配置系统代理
+
+**方法一：终端命令行**
+
+```bash
+# 获取当前网络服务名称（通常是 "Wi-Fi" 或 "Ethernet"）
+networksetup -listallnetworkservices
+
+# 设置 SOCKS5 代理 (以 Wi-Fi 为例)
+sudo networksetup -setsocksfirewallproxy "Wi-Fi" 127.0.0.1 1080
+sudo networksetup -setsocksfirewallproxystate "Wi-Fi" on
+
+# 设置 HTTP 代理
+sudo networksetup -setwebproxy "Wi-Fi" 127.0.0.1 1080
+sudo networksetup -setwebproxystate "Wi-Fi" on
+
+# 设置 HTTPS 代理
+sudo networksetup -setsecurewebproxy "Wi-Fi" 127.0.0.1 1080
+sudo networksetup -setsecurewebproxystate "Wi-Fi" on
+
+# 关闭所有代理
+sudo networksetup -setsocksfirewallproxystate "Wi-Fi" off
+sudo networksetup -setwebproxystate "Wi-Fi" off
+sudo networksetup -setsecurewebproxystate "Wi-Fi" off
+```
+
+**方法二：图形界面**
+
+1. 打开 **系统设置**（或系统偏好设置）
+2. 点击 **网络** → 选择当前连接（如 Wi-Fi）
+3. 点击 **详细信息...** → **代理**
+4. 勾选以下选项并填入配置：
+   - ✅ **网页代理 (HTTP)**：`127.0.0.1` 端口 `1080`
+   - ✅ **安全网页代理 (HTTPS)**：`127.0.0.1` 端口 `1080`
+   - ✅ **SOCKS 代理**：`127.0.0.1` 端口 `1080`
+5. 点击「好」保存
+
+> 💡 **提示**：终端应用默认不走系统代理，需要设置环境变量：
+> ```bash
+> export http_proxy=http://127.0.0.1:1080
+> export https_proxy=http://127.0.0.1:1080
+> export all_proxy=socks5://127.0.0.1:1080
+> ```
+
+---
 
 ### 脚本功能
 
@@ -183,6 +317,140 @@ Run on your Linux server:
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
 ```
 
+---
+
+## 💻 Client Configuration
+
+After server deployment, the script outputs a **short link** and **Clash config**. Below is how to use the official Sudoku client on Windows and macOS.
+
+### Windows Client
+
+#### 1. Download
+
+Download `sudoku-windows-amd64.zip` from [GitHub Releases](https://github.com/SUDOKU-ASCII/sudoku/releases) and extract `sudoku.exe`.
+
+#### 2. Start Client
+
+Open **Command Prompt** or **PowerShell**:
+
+```cmd
+# Start with short link (recommended)
+sudoku.exe -link "sudoku://your-short-link..."
+
+# Or use config file
+sudoku.exe -c client.json
+```
+
+Client listens on `127.0.0.1:1080` (SOCKS5 + HTTP mixed proxy).
+
+#### 3. Configure System Proxy
+
+**Option 1: Command Line (Admin CMD)**
+
+```cmd
+:: Enable proxy
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /t REG_SZ /d "127.0.0.1:1080" /f
+
+:: Disable proxy
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f
+```
+
+**Option 2: PowerShell**
+
+```powershell
+# Enable proxy
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable -Value 1
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyServer -Value "127.0.0.1:1080"
+
+# Disable proxy
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable -Value 0
+```
+
+**Option 3: GUI**
+
+1. Open **Settings** → **Network & Internet** → **Proxy**
+2. Turn off "Automatically detect settings"
+3. Under "Manual proxy setup", turn on the toggle
+4. Enter:
+   - Address: `127.0.0.1`
+   - Port: `1080`
+5. Click "Save"
+
+> 💡 **Note**: Some apps (terminals, games) don't use system proxy. Use Proxifier or configure SOCKS5 directly.
+
+---
+
+### macOS Client
+
+#### 1. Download
+
+Download from [GitHub Releases](https://github.com/SUDOKU-ASCII/sudoku/releases):
+- Intel Mac: `sudoku-darwin-amd64.tar.gz`
+- Apple Silicon: `sudoku-darwin-arm64.tar.gz`
+
+Extract and make executable:
+```bash
+chmod +x sudoku
+```
+
+#### 2. Start Client
+
+```bash
+# Start with short link (recommended)
+./sudoku -link "sudoku://your-short-link..."
+
+# Or use config file
+./sudoku -c client.json
+```
+
+Client listens on `127.0.0.1:1080` (SOCKS5 + HTTP mixed proxy).
+
+#### 3. Configure System Proxy
+
+**Option 1: Terminal**
+
+```bash
+# List network services
+networksetup -listallnetworkservices
+
+# Set SOCKS5 proxy (using Wi-Fi as example)
+sudo networksetup -setsocksfirewallproxy "Wi-Fi" 127.0.0.1 1080
+sudo networksetup -setsocksfirewallproxystate "Wi-Fi" on
+
+# Set HTTP proxy
+sudo networksetup -setwebproxy "Wi-Fi" 127.0.0.1 1080
+sudo networksetup -setwebproxystate "Wi-Fi" on
+
+# Set HTTPS proxy
+sudo networksetup -setsecurewebproxy "Wi-Fi" 127.0.0.1 1080
+sudo networksetup -setsecurewebproxystate "Wi-Fi" on
+
+# Disable all proxies
+sudo networksetup -setsocksfirewallproxystate "Wi-Fi" off
+sudo networksetup -setwebproxystate "Wi-Fi" off
+sudo networksetup -setsecurewebproxystate "Wi-Fi" off
+```
+
+**Option 2: GUI**
+
+1. Open **System Settings** (or System Preferences)
+2. Click **Network** → Select current connection (e.g., Wi-Fi)
+3. Click **Details...** → **Proxies**
+4. Enable and configure:
+   - ✅ **Web Proxy (HTTP)**: `127.0.0.1` port `1080`
+   - ✅ **Secure Web Proxy (HTTPS)**: `127.0.0.1` port `1080`
+   - ✅ **SOCKS Proxy**: `127.0.0.1` port `1080`
+5. Click "OK"
+
+> 💡 **Note**: Terminal apps don't use system proxy. Set environment variables:
+> ```bash
+> export http_proxy=http://127.0.0.1:1080
+> export https_proxy=http://127.0.0.1:1080
+> export all_proxy=socks5://127.0.0.1:1080
+> ```
+
+---
 
 ### Features
 
