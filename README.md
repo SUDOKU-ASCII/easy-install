@@ -148,6 +148,62 @@ sudo networksetup -setsecurewebproxystate "Wi-Fi" off
 
 ---
 
+### Android 客户端 (Sudodroid)
+
+#### 1. 下载安装
+
+从 [GitHub Releases](https://github.com/SUDOKU-ASCII/sudoku-android/releases) 下载最新 APK 并安装。
+
+> 💡 如需自行编译，请参考项目的 [README](https://github.com/SUDOKU-ASCII/sudoku-android)。
+
+#### 2. 导入短链接
+
+打开 Sudodroid 后，有以下方式导入节点：
+
+**方法一：使用「Quick Import」快捷导入**
+
+1. 点击右下角 **「+」** 浮动按钮
+2. 在弹出的对话框顶部找到 **「Quick Import」** 区域
+3. 将 `sudoku://...` 短链接粘贴到输入框中
+4. 点击 **「Import Short Link」** 按钮
+5. 节点会自动导入并被选中
+
+**方法二：使用剪贴板粘贴**
+
+1. 复制服务端生成的短链接（以 `sudoku://` 开头）
+2. 打开 Sudodroid，点击 **「+」** 按钮
+3. 在 **「sudoku:// link」** 输入框右侧点击 **📋 粘贴图标**
+4. 系统会自动从剪贴板读取内容
+5. 点击 **「Import Short Link」** 完成导入
+
+**方法三：手动配置**
+
+如果不使用短链接，也可以在「Add node」对话框中手动填写：
+- **Display name**：节点名称（可选）
+- **Server host**：服务器 IP/域名
+- **Port**：服务器端口（默认 10233）
+- **Key**：私钥（Available Private Key）
+- 其他选项按需配置
+
+#### 3. 连接 VPN
+
+1. 选择一个节点（点击节点卡片）
+2. 点击顶部 **「Start VPN」** 按钮
+3. 首次连接会请求 VPN 权限，点击「确定」授权
+4. 连接成功后，状态栏会显示 VPN 图标
+
+#### 4. 其他功能
+
+| 功能 | 说明 |
+|------|------|
+| **测速 (Ping)** | 点击节点卡片的 🔄 刷新图标测试延迟 |
+| **复制短链接** | 点击 🔗 链接图标可复制当前节点的短链接 |
+| **编辑节点** | 点击 ✏️ 编辑图标修改配置 |
+| **删除节点** | 点击 🗑️ 删除图标移除节点 |
+| **切换节点** | VPN 运行时点击其他节点可热切换 |
+
+---
+
 ### 脚本功能
 
 - ✅ 自动检测系统架构 (amd64/arm64)
@@ -449,6 +505,60 @@ sudo networksetup -setsecurewebproxystate "Wi-Fi" off
 > export https_proxy=http://127.0.0.1:1080
 > export all_proxy=socks5://127.0.0.1:1080
 > ```
+
+---
+
+### Android Client (Sudodroid)
+
+#### 1. Download
+
+Download the latest APK from [GitHub Releases](https://github.com/SUDOKU-ASCII/sudoku-android/releases).
+
+#### 2. Import Short Link
+
+Open Sudodroid and import nodes using one of these methods:
+
+**Option 1: Quick Import**
+
+1. Tap the **"+"** floating button (bottom right)
+2. Find the **"Quick Import"** section at the top of the dialog
+3. Paste the `sudoku://...` short link into the input field
+4. Tap **"Import Short Link"** button
+5. The node will be imported and selected automatically
+
+**Option 2: Clipboard Paste**
+
+1. Copy the short link from server (starts with `sudoku://`)
+2. Open Sudodroid, tap **"+"** button
+3. Tap the **📋 paste icon** next to the "sudoku:// link" input field
+4. The link will be read from clipboard automatically
+5. Tap **"Import Short Link"** to complete
+
+**Option 3: Manual Configuration**
+
+You can also fill in the fields manually in the "Add node" dialog:
+- **Display name**: Node name (optional)
+- **Server host**: Server IP/domain
+- **Port**: Server port (default 10233)
+- **Key**: Private key (Available Private Key)
+- Configure other options as needed
+
+#### 3. Connect VPN
+
+1. Select a node (tap the node card)
+2. Tap **"Start VPN"** button at the top
+3. Grant VPN permission when prompted (first time only)
+4. VPN icon appears in status bar when connected
+
+#### 4. Other Features
+
+| Feature | Description |
+|---------|-------------|
+| **Ping** | Tap 🔄 refresh icon to test latency |
+| **Copy Link** | Tap 🔗 link icon to copy node's short link |
+| **Edit** | Tap ✏️ edit icon to modify settings |
+| **Delete** | Tap 🗑️ delete icon to remove node |
+| **Switch Node** | Tap another node while VPN is running to hot-switch |
 
 ---
 
