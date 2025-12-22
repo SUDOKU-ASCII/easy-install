@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Sudoku Server One-Click Installation Script
-# https://github.com/SUDOKU-ASCII/sudoku
+# https://github.com/saba-futai/sudoku
 #
 # Usage:
 #   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/YOUR_REPO/main/install.sh)"
@@ -19,10 +19,11 @@ set -e
 
 SUDOKU_PORT="${SUDOKU_PORT:-10233}"
 SUDOKU_FALLBACK="${SUDOKU_FALLBACK:-127.0.0.1:80}"
-SUDOKU_REPO="SUDOKU-ASCII/sudoku"
+SUDOKU_REPO="saba-futai/sudoku"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/sudoku"
 SERVICE_NAME="sudoku"
+CUSTOM_TABLE=""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Color Output
@@ -123,7 +124,17 @@ check_dependencies() {
 
 get_latest_version() {
     local version
-    version=$(curl -fsSL "https://api.github.com/repos/${SUDOKU_REPO}/releases/latest" | jq -r '.tag_name')
+    # GitHub API is rate-limited; fall back to the releases/latest redirect when needed.
+    version=$(
+        curl -fsSL "https://api.github.com/repos/${SUDOKU_REPO}/releases/latest" 2>/dev/null \
+            | jq -r '.tag_name' 2>/dev/null \
+            || true
+    )
+    if [[ -z "$version" || "$version" == "null" ]]; then
+        local url=""
+        url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${SUDOKU_REPO}/releases/latest" 2>/dev/null || true)
+        version="${url##*/}"
+    fi
     if [[ -z "$version" || "$version" == "null" ]]; then
         error "Failed to get latest version. Please check network connectivity."
     fi
@@ -150,6 +161,52 @@ download_binary() {
     
     rm -rf "${temp_dir}"
     success "Installed to ${INSTALL_DIR}/sudoku"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Update Kernel Only (Do Not Touch Config)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+has_existing_install() {
+    [[ -x "${INSTALL_DIR}/sudoku" ]] || [[ -f "${CONFIG_DIR}/config.json" ]] || \
+        [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]] || \
+        [[ -f "/lib/systemd/system/${SERVICE_NAME}.service" ]] || \
+        [[ -f "/usr/lib/systemd/system/${SERVICE_NAME}.service" ]]
+}
+
+restart_service_if_present() {
+    if ! command -v systemctl &> /dev/null; then
+        warn "systemctl not found; please restart Sudoku manually if needed."
+        return 0
+    fi
+
+    if [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" || -f "/lib/systemd/system/${SERVICE_NAME}.service" || -f "/usr/lib/systemd/system/${SERVICE_NAME}.service" ]]; then
+        info "Restarting ${SERVICE_NAME} service..."
+        systemctl daemon-reload > /dev/null 2>&1 || true
+        systemctl restart "${SERVICE_NAME}" > /dev/null 2>&1 || systemctl start "${SERVICE_NAME}" > /dev/null 2>&1 || true
+        sleep 2
+        if systemctl is-active --quiet "${SERVICE_NAME}"; then
+            success "Service restarted successfully"
+        else
+            warn "Service may have issues. Check: journalctl -u ${SERVICE_NAME}"
+        fi
+    else
+        warn "Systemd service not found; skipped restart."
+    fi
+}
+
+update_kernel_only() {
+    echo ""
+    warn "Existing installation detected. Updating binary only (config preserved)."
+    if [[ -f "${CONFIG_DIR}/config.json" ]]; then
+        info "Config preserved: ${CONFIG_DIR}/config.json"
+    fi
+
+    VERSION=$(get_latest_version)
+    download_binary "$VERSION"
+    restart_service_if_present
+    success "Kernel update complete (${VERSION})"
+    exit 0
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -201,6 +258,32 @@ get_public_ip() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# X/P/V Custom Table (Sudoku v0.0.9)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+rand_uint32() {
+    od -An -N4 -tu4 /dev/urandom 2>/dev/null | tr -d ' '
+}
+
+generate_xpv_table() {
+    local chars=(x x p p v v v v)
+    local i j tmp r
+
+    for ((i=${#chars[@]}-1; i>0; i--)); do
+        r=$(rand_uint32)
+        if [[ -z "$r" ]]; then
+            r=$RANDOM
+        fi
+        j=$((r % (i+1)))
+        tmp="${chars[i]}"
+        chars[i]="${chars[j]}"
+        chars[j]="$tmp"
+    done
+
+    printf '%s' "${chars[@]}"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Configuration
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -220,6 +303,7 @@ create_config() {
   "ascii": "prefer_entropy",
   "padding_min": 2,
   "padding_max": 7,
+  "custom_table": "${CUSTOM_TABLE}",
   "enable_pure_downlink": false,
   "disable_http_mask": true
 }
@@ -293,13 +377,17 @@ EOF
 generate_short_link() {
     # Build the JSON payload
     local payload
+    local custom_table_fragment=""
+    if [[ -n "${CUSTOM_TABLE:-}" ]]; then
+        custom_table_fragment=",\"t\":\"${CUSTOM_TABLE}\""
+    fi
     payload=$(cat << EOF
-{"h":"${SERVER_IP}","p":${SUDOKU_PORT},"k":"${AVAILABLE_PRIVATE_KEY}","a":"entropy","e":"chacha20-poly1305","m":1080,"x":true}
-EOF
+{"h":"${SERVER_IP}","p":${SUDOKU_PORT},"k":"${AVAILABLE_PRIVATE_KEY}","a":"entropy","e":"chacha20-poly1305","m":1080,"x":true${custom_table_fragment}}
+    EOF
 )
     
     # Base64 encode (URL-safe, no padding)
-    SHORT_LINK="sudoku://$(echo -n "$payload" | base64 | tr '+/' '-_' | tr -d '=')"
+    SHORT_LINK="sudoku://$(echo -n "$payload" | base64 | tr -d '\n' | tr '+/' '-_' | tr -d '=')"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -307,6 +395,10 @@ EOF
 # ═══════════════════════════════════════════════════════════════════════════════
 
 generate_clash_config() {
+    local custom_table_yaml=""
+    if [[ -n "${CUSTOM_TABLE:-}" ]]; then
+        custom_table_yaml="  custom-table: ${CUSTOM_TABLE}"
+    fi
     CLASH_CONFIG=$(cat << EOF
 # sudoku
 - name: sudoku
@@ -317,6 +409,7 @@ generate_clash_config() {
   aead-method: chacha20-poly1305
   padding-min: 2
   padding-max: 7
+${custom_table_yaml}
   table-type: prefer_entropy
   http-mask: false
   enable-pure-downlink: false
@@ -406,7 +499,12 @@ main() {
     check_dependencies
     
     echo ""
-    
+
+    # If already installed, only update the binary (do not touch config)
+    if has_existing_install; then
+        update_kernel_only
+    fi
+
     # Get latest version and download
     VERSION=$(get_latest_version)
     download_binary "$VERSION"
@@ -414,6 +512,9 @@ main() {
     # Generate keys and detect IP
     generate_keypair
     get_public_ip
+
+    CUSTOM_TABLE=$(generate_xpv_table)
+    success "Custom X/P/V table: ${CUSTOM_TABLE}"
     
     echo ""
     

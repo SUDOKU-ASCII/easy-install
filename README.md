@@ -242,6 +242,10 @@ sudo SUDOKU_FALLBACK="127.0.0.1:8080" bash -c "$(curl -fsSL ...)"
 sudo bash install.sh --uninstall
 ```
 
+### 更新内核
+
+再次运行一键命令会自动检测已有安装，仅更新 `/usr/local/bin/sudoku` 并重启服务，不会覆盖 `/etc/sudoku/config.json`。
+
 ---
 
 ## 📋 输出说明
@@ -271,6 +275,7 @@ sudoku://eyJoIjoiMS4yLjMuNCIsInAiOjEwMjMzLC...
   aead-method: chacha20-poly1305
   padding-min: 2
   padding-max: 7
+  custom-table: xpxvvpvv
   table-type: prefer_entropy
   http-mask: false
   enable-pure-downlink: false
@@ -598,6 +603,10 @@ sudo SUDOKU_FALLBACK="127.0.0.1:8080" bash -c "$(curl -fsSL ...)"
 sudo bash install.sh --uninstall
 ```
 
+### Update
+
+Re-run the one-click command to update `/usr/local/bin/sudoku` and restart the service; it will not overwrite `/etc/sudoku/config.json`.
+
 ---
 
 ## 📋 Output
@@ -627,6 +636,7 @@ Use with client:
   aead-method: chacha20-poly1305
   padding-min: 2
   padding-max: 7
+  custom-table: xpxvvpvv
   table-type: prefer_entropy
   http-mask: false
   enable-pure-downlink: false
