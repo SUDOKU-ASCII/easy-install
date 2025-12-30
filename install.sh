@@ -1,14 +1,19 @@
 #!/bin/bash
 #
 # Sudoku Server One-Click Installation Script
-# https://github.com/saba-futai/sudoku
+# https://github.com/SUDOKU-ASCII/sudoku
 #
 # Usage:
-#   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/YOUR_REPO/main/install.sh)"
+#   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
 #
 # Environment Variables:
 #   SUDOKU_PORT      - Server port (default: 10233)
 #   SUDOKU_FALLBACK  - Fallback address (default: 127.0.0.1:80)
+#   SERVER_IP        - Override public host/IP used in short link & Clash config (default: auto-detect)
+#   SUDOKU_HTTP_MASK - Enable HTTP mask (default: true)
+#   SUDOKU_HTTP_MASK_MODE - HTTP mask mode: auto/stream/poll/legacy (default: auto)
+#   SUDOKU_HTTP_MASK_TLS  - Use HTTPS in HTTP mask tunnel modes (default: false)
+#   SUDOKU_HTTP_MASK_HOST - Override HTTP Host/SNI in tunnel modes (default: empty)
 #
 
 set -e
@@ -19,11 +24,19 @@ set -e
 
 SUDOKU_PORT="${SUDOKU_PORT:-10233}"
 SUDOKU_FALLBACK="${SUDOKU_FALLBACK:-127.0.0.1:80}"
-SUDOKU_REPO="saba-futai/sudoku"
+SUDOKU_REPO="${SUDOKU_REPO:-SUDOKU-ASCII/sudoku}"
+SUDOKU_HTTP_MASK="${SUDOKU_HTTP_MASK:-true}"
+SUDOKU_HTTP_MASK_MODE="${SUDOKU_HTTP_MASK_MODE:-auto}"
+SUDOKU_HTTP_MASK_TLS="${SUDOKU_HTTP_MASK_TLS:-false}"
+SUDOKU_HTTP_MASK_HOST="${SUDOKU_HTTP_MASK_HOST:-}"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/sudoku"
 SERVICE_NAME="sudoku"
 CUSTOM_TABLE=""
+DISABLE_HTTP_MASK="false"
+HTTP_MASK_MODE="auto"
+HTTP_MASK_TLS="false"
+HTTP_MASK_HOST=""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Color Output
@@ -56,6 +69,71 @@ info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 success() { echo -e "${GREEN}[✓]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Input Normalization
+# ═══════════════════════════════════════════════════════════════════════════════
+
+normalize_bool() {
+    local raw="${1:-}"
+    raw=$(echo "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    case "$raw" in
+        1|true|yes|y|on) echo "true" ;;
+        0|false|no|n|off) echo "false" ;;
+        *) return 1 ;;
+    esac
+}
+
+trim_space() {
+    local s="${1:-}"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
+}
+
+normalize_settings() {
+    local http_mask_enabled
+    local http_mask_tls
+
+    if ! http_mask_enabled=$(normalize_bool "${SUDOKU_HTTP_MASK}"); then
+        error "Invalid SUDOKU_HTTP_MASK=${SUDOKU_HTTP_MASK} (expected true/false)"
+    fi
+    if ! http_mask_tls=$(normalize_bool "${SUDOKU_HTTP_MASK_TLS}"); then
+        error "Invalid SUDOKU_HTTP_MASK_TLS=${SUDOKU_HTTP_MASK_TLS} (expected true/false)"
+    fi
+
+    HTTP_MASK_MODE=$(trim_space "${SUDOKU_HTTP_MASK_MODE}")
+    HTTP_MASK_MODE=$(echo "${HTTP_MASK_MODE}" | tr '[:upper:]' '[:lower:]')
+    if [[ -z "${HTTP_MASK_MODE}" ]]; then
+        HTTP_MASK_MODE="auto"
+    fi
+    case "${HTTP_MASK_MODE}" in
+        auto|stream|poll|legacy) ;;
+        *) error "Invalid SUDOKU_HTTP_MASK_MODE=${SUDOKU_HTTP_MASK_MODE} (expected auto/stream/poll/legacy)" ;;
+    esac
+
+    HTTP_MASK_HOST=$(trim_space "${SUDOKU_HTTP_MASK_HOST}")
+    HTTP_MASK_TLS="${http_mask_tls}"
+
+    if [[ "${http_mask_enabled}" == "true" ]]; then
+        DISABLE_HTTP_MASK="false"
+    else
+        DISABLE_HTTP_MASK="true"
+    fi
+}
+
+join_host_port() {
+    local host="${1:-}"
+    local port="${2:-}"
+    if [[ -z "${host}" || -z "${port}" ]]; then
+        return 1
+    fi
+    if [[ "${host}" == *:* && "${host}" != \[*\] ]]; then
+        printf '[%s]:%s' "${host}" "${port}"
+    else
+        printf '%s:%s' "${host}" "${port}"
+    fi
+}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # System Detection
@@ -234,6 +312,11 @@ generate_keypair() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 get_public_ip() {
+    if [[ -n "${SERVER_IP:-}" ]]; then
+        success "Public host: ${SERVER_IP}"
+        return 0
+    fi
+
     local ip=""
     local apis=(
         "https://api.ipify.org"
@@ -247,10 +330,13 @@ get_public_ip() {
     
     for api in "${apis[@]}"; do
         ip=$(curl -fsSL --connect-timeout 5 "$api" 2>/dev/null | tr -d '\n')
-        if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            SERVER_IP="$ip"
-            success "Public IP: $SERVER_IP"
-            return 0
+        if [[ -n "$ip" ]]; then
+            # Basic IPv4 / IPv6 check (best effort).
+            if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
+                SERVER_IP="$ip"
+                success "Public IP: $SERVER_IP"
+                return 0
+            fi
         fi
     done
     
@@ -258,7 +344,7 @@ get_public_ip() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# X/P/V Custom Table (Sudoku v0.0.9)
+# X/P/V Custom Table (Sudoku v0.1.4+)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 rand_uint32() {
@@ -305,7 +391,10 @@ create_config() {
   "padding_max": 7,
   "custom_table": "${CUSTOM_TABLE}",
   "enable_pure_downlink": false,
-  "disable_http_mask": true
+  "disable_http_mask": ${DISABLE_HTTP_MASK},
+  "http_mask_mode": "${HTTP_MASK_MODE}",
+  "http_mask_tls": ${HTTP_MASK_TLS},
+  "http_mask_host": "${HTTP_MASK_HOST}"
 }
 EOF
     
@@ -375,19 +464,42 @@ EOF
 # ═══════════════════════════════════════════════════════════════════════════════
 
 generate_short_link() {
-    # Build the JSON payload
-    local payload
-    local custom_table_fragment=""
-    if [[ -n "${CUSTOM_TABLE:-}" ]]; then
-        custom_table_fragment=",\"t\":\"${CUSTOM_TABLE}\""
+    info "Generating sudoku:// short link..."
+
+    local temp_dir temp_cfg export_output
+    temp_dir=$(mktemp -d)
+    temp_cfg="${temp_dir}/client.json"
+    local server_address
+    server_address=$(join_host_port "${SERVER_IP}" "${SUDOKU_PORT}")
+
+    cat > "${temp_cfg}" << EOF
+{
+  "mode": "client",
+  "local_port": 1080,
+  "server_address": "${server_address}",
+  "key": "${AVAILABLE_PRIVATE_KEY}",
+  "aead": "chacha20-poly1305",
+  "ascii": "prefer_entropy",
+  "padding_min": 5,
+  "padding_max": 15,
+  "custom_table": "${CUSTOM_TABLE}",
+  "enable_pure_downlink": false,
+  "disable_http_mask": ${DISABLE_HTTP_MASK},
+  "http_mask_mode": "${HTTP_MASK_MODE}",
+  "http_mask_tls": ${HTTP_MASK_TLS},
+  "http_mask_host": "${HTTP_MASK_HOST}",
+  "rule_urls": ["global"]
+}
+EOF
+
+    export_output=$("${INSTALL_DIR}/sudoku" -c "${temp_cfg}" -export-link 2>/dev/null || true)
+    SHORT_LINK=$(echo "${export_output}" | awk -F 'Short link: ' '/Short link: /{print $2; exit}')
+    rm -rf "${temp_dir}"
+
+    if [[ -z "${SHORT_LINK}" ]]; then
+        error "Failed to generate short link"
     fi
-    payload=$(cat << EOF
-{"h":"${SERVER_IP}","p":${SUDOKU_PORT},"k":"${AVAILABLE_PRIVATE_KEY}","a":"entropy","e":"chacha20-poly1305","m":1080,"x":true${custom_table_fragment}}
-    EOF
-)
-    
-    # Base64 encode (URL-safe, no padding)
-    SHORT_LINK="sudoku://$(echo -n "$payload" | base64 | tr -d '\n' | tr '+/' '-_' | tr -d '=')"
+    success "Short link generated"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -399,11 +511,19 @@ generate_clash_config() {
     if [[ -n "${CUSTOM_TABLE:-}" ]]; then
         custom_table_yaml="  custom-table: ${CUSTOM_TABLE}"
     fi
+    local http_mask_yaml="true"
+    if [[ "${DISABLE_HTTP_MASK}" == "true" ]]; then
+        http_mask_yaml="false"
+    fi
+    local http_mask_host_yaml=""
+    if [[ -n "${HTTP_MASK_HOST:-}" ]]; then
+        http_mask_host_yaml="  http-mask-host: \"${HTTP_MASK_HOST}\""
+    fi
     CLASH_CONFIG=$(cat << EOF
 # sudoku
 - name: sudoku
   type: sudoku
-  server: ${SERVER_IP}
+  server: "${SERVER_IP}"
   port: ${SUDOKU_PORT}
   key: "${AVAILABLE_PRIVATE_KEY}"
   aead-method: chacha20-poly1305
@@ -411,7 +531,10 @@ generate_clash_config() {
   padding-max: 7
 ${custom_table_yaml}
   table-type: prefer_entropy
-  http-mask: false
+  http-mask: ${http_mask_yaml}
+  http-mask-mode: ${HTTP_MASK_MODE}
+  http-mask-tls: ${HTTP_MASK_TLS}
+${http_mask_host_yaml}
   enable-pure-downlink: false
 EOF
 )
@@ -497,6 +620,7 @@ main() {
     detect_os
     detect_arch
     check_dependencies
+    normalize_settings
     
     echo ""
 

@@ -222,7 +222,7 @@ sudo networksetup -setsecurewebproxystate "Wi-Fi" off
 | 模式 | `prefer_entropy` (低熵模式) |
 | AEAD | `chacha20-poly1305` |
 | 纯 Sudoku 下行 | `false` (带宽优化模式) |
-| HTTP 掩码 | `false` |
+| HTTP 掩码 | `true` (`auto`) |
 
 ### 自定义配置
 
@@ -230,10 +230,22 @@ sudo networksetup -setsecurewebproxystate "Wi-Fi" off
 
 ```bash
 # 自定义端口
-sudo SUDOKU_PORT=8443 bash -c "$(curl -fsSL ...)"
+sudo SUDOKU_PORT=8443 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
 
 # 自定义回落地址
-sudo SUDOKU_FALLBACK="127.0.0.1:8080" bash -c "$(curl -fsSL ...)"
+sudo SUDOKU_FALLBACK="127.0.0.1:8080" bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+
+# 指定短链接/Clash 输出使用的域名或 IP（例如走 CDN 时用域名）
+sudo SERVER_IP="example.com" bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+
+# 关闭 HTTP 掩码（直连 TCP）
+sudo SUDOKU_HTTP_MASK=false bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+
+# 指定 HTTP 掩码模式（auto / stream / poll / legacy）
+sudo SUDOKU_HTTP_MASK_MODE=poll bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+
+# 开启 tunnel 模式 HTTPS（v0.1.4 起不再按端口自动推断 TLS）
+sudo SUDOKU_HTTP_MASK_TLS=true bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
 ```
 
 ### 卸载
@@ -277,7 +289,9 @@ sudoku://eyJoIjoiMS4yLjMuNCIsInAiOjEwMjMzLC...
   padding-max: 7
   custom-table: xpxvvpvv
   table-type: prefer_entropy
-  http-mask: false
+  http-mask: true
+  http-mask-mode: auto
+  http-mask-tls: false
   enable-pure-downlink: false
 ```
 
@@ -300,7 +314,7 @@ sudoku://eyJoIjoiMS4yLjMuNCIsInAiOjEwMjMzLC...
 2. SSH 连接到实例
 3. 运行一键安装脚本：
    ```bash
-   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/YOUR_REPO/main/install.sh)"
+   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
    ```
 4. 保存输出的短链接和 Clash 配置
 
@@ -585,16 +599,28 @@ You can also fill in the fields manually in the "Add node" dialog:
 | Mode | `prefer_entropy` (low entropy) |
 | AEAD | `chacha20-poly1305` |
 | Pure Sudoku Downlink | `false` (bandwidth optimized) |
-| HTTP Mask | `false` |
+| HTTP Mask | `true` (`auto`) |
 
 ### Customization
 
 ```bash
 # Custom port
-sudo SUDOKU_PORT=8443 bash -c "$(curl -fsSL ...)"
+sudo SUDOKU_PORT=8443 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
 
 # Custom fallback
-sudo SUDOKU_FALLBACK="127.0.0.1:8080" bash -c "$(curl -fsSL ...)"
+sudo SUDOKU_FALLBACK="127.0.0.1:8080" bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+
+# Override advertised host (domain/IP) used in short link & Clash config (use a domain for CDN)
+sudo SERVER_IP="example.com" bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+
+# Disable HTTP mask (raw TCP)
+sudo SUDOKU_HTTP_MASK=false bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+
+# HTTP mask mode (auto / stream / poll / legacy)
+sudo SUDOKU_HTTP_MASK_MODE=poll bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+
+# Enable HTTPS in tunnel modes (since v0.1.4, no port-based TLS inference)
+sudo SUDOKU_HTTP_MASK_TLS=true bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
 ```
 
 ### Uninstall
@@ -638,7 +664,9 @@ Use with client:
   padding-max: 7
   custom-table: xpxvvpvv
   table-type: prefer_entropy
-  http-mask: false
+  http-mask: true
+  http-mask-mode: auto
+  http-mask-tls: false
   enable-pure-downlink: false
 ```
 
