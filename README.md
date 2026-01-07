@@ -211,6 +211,7 @@ sudo networksetup -setsecurewebproxystate "Wi-Fi" off
 - ✅ 自动生成密钥对
 - ✅ 自动获取服务器公网 IP
 - ✅ 创建 systemd 服务（开机自启）
+- ✅ 自动部署 Cloudflare 风格 500 错误页回落站（默认 `127.0.0.1:10232`，失败则回落 `127.0.0.1:80`）
 - ✅ 自动配置 UFW 防火墙（如果启用）
 - ✅ 输出短链接和 Clash 节点配置
 
@@ -234,6 +235,12 @@ sudo SUDOKU_PORT=8443 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SU
 
 # 自定义回落地址
 sudo SUDOKU_FALLBACK="127.0.0.1:8080" bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+
+# 关闭 Cloudflare 500 错误页回落站（将不会自动覆盖 SUDOKU_FALLBACK）
+sudo SUDOKU_CF_FALLBACK=false bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+
+# 自定义 Cloudflare 500 错误页回落站端口（优先 10232，失败再尝试 80）
+sudo SUDOKU_CF_FALLBACK_PORT=10232 SUDOKU_CF_FALLBACK_FALLBACK_PORT=80 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
 
 # 指定短链接/Clash 输出使用的域名或 IP（例如走 CDN 时用域名）
 sudo SERVER_IP="example.com" bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
@@ -317,6 +324,9 @@ sudoku://eyJoIjoiMS4yLjMuNCIsInAiOjEwMjMzLC...
 # 查看状态
 sudo systemctl status sudoku
 
+# 查看 Cloudflare 500 回落站状态
+sudo systemctl status sudoku-fallback
+
 # 重启服务
 sudo systemctl restart sudoku
 
@@ -336,6 +346,8 @@ sudo systemctl stop sudoku
 | 二进制 | `/usr/local/bin/sudoku` |
 | 配置文件 | `/etc/sudoku/config.json` |
 | 服务文件 | `/etc/systemd/system/sudoku.service` |
+| Cloudflare 500 回落站服务 | `/etc/systemd/system/sudoku-fallback.service` |
+| Cloudflare 500 回落站文件 | `/usr/local/lib/sudoku-fallback` |
 
 ---
 
@@ -544,6 +556,7 @@ You can also fill in the fields manually in the "Add node" dialog:
 - ✅ Generate keypair automatically
 - ✅ Detect server public IP
 - ✅ Create systemd service (auto-start)
+- ✅ Deploy Cloudflare-style 500 error fallback page (default `127.0.0.1:10232`, falls back to `127.0.0.1:80`)
 - ✅ Configure UFW firewall (if enabled)
 - ✅ Output short link and Clash node config
 
@@ -565,6 +578,12 @@ sudo SUDOKU_PORT=8443 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SU
 
 # Custom fallback
 sudo SUDOKU_FALLBACK="127.0.0.1:8080" bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+
+# Disable Cloudflare 500 fallback page service (will not override SUDOKU_FALLBACK)
+sudo SUDOKU_CF_FALLBACK=false bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+
+# Customize Cloudflare 500 fallback page ports (try 10232 first, then 80)
+sudo SUDOKU_CF_FALLBACK_PORT=10232 SUDOKU_CF_FALLBACK_FALLBACK_PORT=80 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
 
 # Override advertised host (domain/IP) used in short link & Clash config (use a domain for CDN)
 sudo SERVER_IP="example.com" bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
@@ -646,6 +665,7 @@ Use the one-click script directly. Supports:
 
 ```bash
 sudo systemctl status sudoku    # Status
+sudo systemctl status sudoku-fallback   # CF fallback page status
 sudo systemctl restart sudoku   # Restart
 sudo journalctl -u sudoku -f    # Logs
 ```
