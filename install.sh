@@ -339,9 +339,9 @@ write_cf_fallback_server() {
     cat > "${FALLBACK_LIB_DIR}/server.py" << 'PY'
 import argparse
 import json
-import sys
+import secrets
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from socketserver import ThreadingMixIn
 
 
 def _load_params(path: str) -> dict:
@@ -349,39 +349,35 @@ def _load_params(path: str) -> dict:
         return json.load(f)
 
 
-class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
-    daemon_threads = True
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=10232)
     parser.add_argument("--params", required=True)
-    parser.add_argument("--lib-dir", required=True)
+    parser.add_argument("--templates", required=True)
     args = parser.parse_args()
 
-    sys.path.insert(0, args.lib_dir)
-    from cloudflare_error_page import render as render_cf_error_page  # type: ignore
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-    base_params = _load_params(args.params)
+    base_params = _load_params(args.params) or {}
+    if not base_params.get("time"):
+        utc_now = datetime.now(timezone.utc)
+        base_params["time"] = utc_now.strftime("%Y-%m-%d %H:%M:%S UTC")
+    if not base_params.get("ray_id"):
+        base_params["ray_id"] = secrets.token_hex(8)
+
+    env = Environment(
+        loader=FileSystemLoader(args.templates),
+        autoescape=select_autoescape(),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    template = env.get_template("template.html")
+    rendered_page = template.render(params=base_params).encode("utf-8")
 
     class Handler(BaseHTTPRequestHandler):
         def _write_page(self, method: str) -> None:
-            params = dict(base_params)
-
-            host = self.headers.get("Host")
-            if host:
-                host = host.split(":", 1)[0].strip()
-                if host:
-                    try:
-                        host_status = dict(params.get("host_status") or {})
-                        host_status["location"] = host
-                        params["host_status"] = host_status
-                    except Exception:
-                        pass
-
-            body = render_cf_error_page(params).encode("utf-8")
+            body = rendered_page
             self.send_response(500)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -398,7 +394,7 @@ def main() -> int:
         def log_message(self, format: str, *args) -> None:  # noqa: A002
             return
 
-    server = ThreadingHTTPServer((args.bind, args.port), Handler)
+    server = HTTPServer((args.bind, args.port), Handler)
     server.serve_forever()
     return 0
 
@@ -441,8 +437,10 @@ download_cf_fallback_vendor() {
         return 1
     fi
 
-    rm -rf "${FALLBACK_LIB_DIR}/cloudflare_error_page"
-    cp -R "${src_root}/cloudflare_error_page" "${FALLBACK_LIB_DIR}/"
+    rm -rf "${FALLBACK_LIB_DIR}/templates"
+    mkdir -p "${FALLBACK_LIB_DIR}/templates"
+    cp "${src_root}/cloudflare_error_page/templates/template.html" "${FALLBACK_LIB_DIR}/templates/template.html"
+    cp "${src_root}/resources/styles/main.css" "${FALLBACK_LIB_DIR}/templates/main.css"
     cp "${src_root}/examples/default.json" "${FALLBACK_LIB_DIR}/params.json"
 
     rm -rf "${temp_dir}"
@@ -462,12 +460,14 @@ write_cf_fallback_service() {
 [Unit]
 Description=Sudoku Cloudflare 500 Error Page Fallback
 After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
-ExecStart=${pybin} ${FALLBACK_LIB_DIR}/server.py --bind ${bind} --port ${port} --params ${FALLBACK_LIB_DIR}/params.json --lib-dir ${FALLBACK_LIB_DIR}
+ExecStart=${pybin} ${FALLBACK_LIB_DIR}/server.py --bind ${bind} --port ${port} --params ${FALLBACK_LIB_DIR}/params.json --templates ${FALLBACK_LIB_DIR}/templates
 Restart=on-failure
-RestartSec=2
+RestartSec=5
 LimitNOFILE=1048576
 
 [Install]
@@ -482,12 +482,14 @@ start_cf_fallback_service() {
     if ! command -v systemctl &> /dev/null; then
         return 1
     fi
-    if [[ ! -f "${FALLBACK_LIB_DIR}/server.py" || ! -f "${FALLBACK_LIB_DIR}/params.json" || ! -d "${FALLBACK_LIB_DIR}/cloudflare_error_page" ]]; then
+    if [[ ! -f "${FALLBACK_LIB_DIR}/server.py" || ! -f "${FALLBACK_LIB_DIR}/params.json" || ! -f "${FALLBACK_LIB_DIR}/templates/template.html" || ! -f "${FALLBACK_LIB_DIR}/templates/main.css" ]]; then
         return 1
     fi
 
     write_cf_fallback_service "${bind}" "${port}" || return 1
     systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl stop "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
+    systemctl reset-failed "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
     systemctl enable "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
     systemctl restart "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || systemctl start "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
     sleep 1
@@ -623,6 +625,33 @@ restart_service_if_present() {
     fi
 }
 
+refresh_cf_fallback_if_present() {
+    if [[ "${CF_FALLBACK_ENABLED}" != "true" ]]; then
+        return 0
+    fi
+    if ! command -v systemctl &> /dev/null; then
+        return 0
+    fi
+    if [[ ! -f "/etc/systemd/system/${FALLBACK_SERVICE_NAME}.service" && ! -f "/lib/systemd/system/${FALLBACK_SERVICE_NAME}.service" && ! -f "/usr/lib/systemd/system/${FALLBACK_SERVICE_NAME}.service" ]]; then
+        return 0
+    fi
+
+    info "Refreshing ${FALLBACK_SERVICE_NAME} assets..."
+    if ! download_cf_fallback_vendor; then
+        warn "Failed to refresh ${FALLBACK_SERVICE_NAME} assets (download failed)."
+        return 0
+    fi
+    write_cf_fallback_server
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl restart "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
+    sleep 1
+    if systemctl is-active --quiet "${FALLBACK_SERVICE_NAME}"; then
+        success "${FALLBACK_SERVICE_NAME} refreshed"
+    else
+        warn "${FALLBACK_SERVICE_NAME} may have issues. Check: journalctl -u ${FALLBACK_SERVICE_NAME}"
+    fi
+}
+
 update_kernel_only() {
     echo ""
     warn "Existing installation detected. Updating binary only (config preserved)."
@@ -633,6 +662,7 @@ update_kernel_only() {
     VERSION=$(get_latest_version)
     download_binary "$VERSION"
     restart_service_if_present
+    refresh_cf_fallback_if_present
     success "Kernel update complete (${VERSION})"
     exit 0
 }
