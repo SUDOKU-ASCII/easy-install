@@ -8,11 +8,13 @@
 #
 # Environment Variables:
 #   SUDOKU_PORT      - Server port (default: 10233)
+#   SUDOKU_CLIENT_PORT - Client local proxy port used in exported short link (default: 10233)
 #   SUDOKU_FALLBACK  - Fallback address (default: 127.0.0.1:80)
 #   SERVER_IP        - Override public host/IP used in short link & Clash config (default: auto-detect)
 #   SUDOKU_HTTP_MASK - Enable HTTP mask (default: true)
 #   SUDOKU_HTTP_MASK_MODE - HTTP mask mode: auto/stream/poll/legacy (default: auto)
 #   SUDOKU_HTTP_MASK_TLS  - Use HTTPS in HTTP mask tunnel modes (default: false)
+#   SUDOKU_HTTP_MASK_MULTIPLEX - HTTP mask mux: off/auto/on (default: on)
 #   SUDOKU_HTTP_MASK_HOST - Override HTTP Host/SNI in tunnel modes (default: empty)
 #
 
@@ -23,11 +25,13 @@ set -e
 # ═══════════════════════════════════════════════════════════════════════════════
 
 SUDOKU_PORT="${SUDOKU_PORT:-10233}"
+SUDOKU_CLIENT_PORT="${SUDOKU_CLIENT_PORT:-10233}"
 SUDOKU_FALLBACK="${SUDOKU_FALLBACK:-127.0.0.1:80}"
 SUDOKU_REPO="${SUDOKU_REPO:-SUDOKU-ASCII/sudoku}"
 SUDOKU_HTTP_MASK="${SUDOKU_HTTP_MASK:-true}"
 SUDOKU_HTTP_MASK_MODE="${SUDOKU_HTTP_MASK_MODE:-auto}"
 SUDOKU_HTTP_MASK_TLS="${SUDOKU_HTTP_MASK_TLS:-false}"
+SUDOKU_HTTP_MASK_MULTIPLEX="${SUDOKU_HTTP_MASK_MULTIPLEX:-on}"
 SUDOKU_HTTP_MASK_HOST="${SUDOKU_HTTP_MASK_HOST:-}"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/sudoku"
@@ -36,6 +40,7 @@ CUSTOM_TABLE=""
 DISABLE_HTTP_MASK="false"
 HTTP_MASK_MODE="auto"
 HTTP_MASK_TLS="false"
+HTTP_MASK_MULTIPLEX="on"
 HTTP_MASK_HOST=""
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -114,6 +119,16 @@ normalize_settings() {
 
     HTTP_MASK_HOST=$(trim_space "${SUDOKU_HTTP_MASK_HOST}")
     HTTP_MASK_TLS="${http_mask_tls}"
+
+    HTTP_MASK_MULTIPLEX=$(trim_space "${SUDOKU_HTTP_MASK_MULTIPLEX}")
+    HTTP_MASK_MULTIPLEX=$(echo "${HTTP_MASK_MULTIPLEX}" | tr '[:upper:]' '[:lower:]')
+    if [[ -z "${HTTP_MASK_MULTIPLEX}" ]]; then
+        HTTP_MASK_MULTIPLEX="on"
+    fi
+    case "${HTTP_MASK_MULTIPLEX}" in
+        off|auto|on) ;;
+        *) error "Invalid SUDOKU_HTTP_MASK_MULTIPLEX=${SUDOKU_HTTP_MASK_MULTIPLEX} (expected off/auto/on)" ;;
+    esac
 
     if [[ "${http_mask_enabled}" == "true" ]]; then
         DISABLE_HTTP_MASK="false"
@@ -394,6 +409,7 @@ create_config() {
   "disable_http_mask": ${DISABLE_HTTP_MASK},
   "http_mask_mode": "${HTTP_MASK_MODE}",
   "http_mask_tls": ${HTTP_MASK_TLS},
+  "http_mask_multiplex": "${HTTP_MASK_MULTIPLEX}",
   "http_mask_host": "${HTTP_MASK_HOST}"
 }
 EOF
@@ -475,7 +491,7 @@ generate_short_link() {
     cat > "${temp_cfg}" << EOF
 {
   "mode": "client",
-  "local_port": 1080,
+  "local_port": ${SUDOKU_CLIENT_PORT},
   "server_address": "${server_address}",
   "key": "${AVAILABLE_PRIVATE_KEY}",
   "aead": "chacha20-poly1305",
@@ -487,6 +503,7 @@ generate_short_link() {
   "disable_http_mask": ${DISABLE_HTTP_MASK},
   "http_mask_mode": "${HTTP_MASK_MODE}",
   "http_mask_tls": ${HTTP_MASK_TLS},
+  "http_mask_multiplex": "${HTTP_MASK_MULTIPLEX}",
   "http_mask_host": "${HTTP_MASK_HOST}",
   "rule_urls": ["global"]
 }
@@ -507,37 +524,42 @@ EOF
 # ═══════════════════════════════════════════════════════════════════════════════
 
 generate_clash_config() {
-    local custom_table_yaml=""
-    if [[ -n "${CUSTOM_TABLE:-}" ]]; then
-        custom_table_yaml="  custom-table: ${CUSTOM_TABLE}"
-    fi
     local http_mask_yaml="true"
     if [[ "${DISABLE_HTTP_MASK}" == "true" ]]; then
         http_mask_yaml="false"
     fi
-    local http_mask_host_yaml=""
-    if [[ -n "${HTTP_MASK_HOST:-}" ]]; then
-        http_mask_host_yaml="  http-mask-host: \"${HTTP_MASK_HOST}\""
+
+    local lines=(
+        "# sudoku"
+        "- name: sudoku"
+        "  type: sudoku"
+        "  server: \"${SERVER_IP}\""
+        "  port: ${SUDOKU_PORT}"
+        "  key: \"${AVAILABLE_PRIVATE_KEY}\""
+        "  aead-method: chacha20-poly1305"
+        "  padding-min: 2"
+        "  padding-max: 7"
+    )
+
+    if [[ -n "${CUSTOM_TABLE:-}" ]]; then
+        lines+=("  custom-table: ${CUSTOM_TABLE}")
     fi
-    CLASH_CONFIG=$(cat << EOF
-# sudoku
-- name: sudoku
-  type: sudoku
-  server: "${SERVER_IP}"
-  port: ${SUDOKU_PORT}
-  key: "${AVAILABLE_PRIVATE_KEY}"
-  aead-method: chacha20-poly1305
-  padding-min: 2
-  padding-max: 7
-${custom_table_yaml}
-  table-type: prefer_entropy
-  http-mask: ${http_mask_yaml}
-  http-mask-mode: ${HTTP_MASK_MODE}
-  http-mask-tls: ${HTTP_MASK_TLS}
-${http_mask_host_yaml}
-  enable-pure-downlink: false
-EOF
-)
+
+    lines+=(
+        "  table-type: prefer_entropy"
+        "  http-mask: ${http_mask_yaml}"
+        "  http-mask-mode: ${HTTP_MASK_MODE}"
+        "  http-mask-tls: ${HTTP_MASK_TLS}"
+        "  http-mask-multiplex: \"${HTTP_MASK_MULTIPLEX}\""
+    )
+
+    if [[ -n "${HTTP_MASK_HOST:-}" ]]; then
+        lines+=("  http-mask-host: \"${HTTP_MASK_HOST}\"")
+    fi
+
+    lines+=("  enable-pure-downlink: false")
+
+    CLASH_CONFIG=$(printf '%s\n' "${lines[@]}")
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

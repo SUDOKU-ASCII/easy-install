@@ -37,7 +37,7 @@ sudoku.exe -link "sudoku://你的短链接..."
 sudoku.exe -c client.json
 ```
 
-客户端默认监听 `127.0.0.1:1080`（SOCKS5 + HTTP 混合代理）。
+客户端默认监听 `127.0.0.1:10233`（SOCKS5 + HTTP 混合代理）。
 
 #### 3. 配置系统代理
 
@@ -46,7 +46,7 @@ sudoku.exe -c client.json
 ```cmd
 :: 开启代理
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f
-reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /t REG_SZ /d "127.0.0.1:1080" /f
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /t REG_SZ /d "127.0.0.1:10233" /f
 
 :: 关闭代理
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f
@@ -57,7 +57,7 @@ reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v Pr
 ```powershell
 # 开启代理
 Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable -Value 1
-Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyServer -Value "127.0.0.1:1080"
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyServer -Value "127.0.0.1:10233"
 
 # 关闭代理
 Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable -Value 0
@@ -70,7 +70,7 @@ Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet
 3. 在「手动设置代理」下，打开开关
 4. 填入：
    - 地址：`127.0.0.1`
-   - 端口：`1080`
+   - 端口：`10233`
 5. 点击「保存」
 
 > 💡 **提示**：部分应用（如终端、游戏）不走系统代理，需单独配置 SOCKS5 代理或使用 Proxifier 等工具。
@@ -100,7 +100,7 @@ chmod +x sudoku
 ./sudoku -c client.json
 ```
 
-客户端默认监听 `127.0.0.1:1080`（SOCKS5 + HTTP 混合代理）。
+客户端默认监听 `127.0.0.1:10233`（SOCKS5 + HTTP 混合代理）。
 
 #### 3. 配置系统代理
 
@@ -111,15 +111,15 @@ chmod +x sudoku
 networksetup -listallnetworkservices
 
 # 设置 SOCKS5 代理 (以 Wi-Fi 为例)
-sudo networksetup -setsocksfirewallproxy "Wi-Fi" 127.0.0.1 1080
+sudo networksetup -setsocksfirewallproxy "Wi-Fi" 127.0.0.1 10233
 sudo networksetup -setsocksfirewallproxystate "Wi-Fi" on
 
 # 设置 HTTP 代理
-sudo networksetup -setwebproxy "Wi-Fi" 127.0.0.1 1080
+sudo networksetup -setwebproxy "Wi-Fi" 127.0.0.1 10233
 sudo networksetup -setwebproxystate "Wi-Fi" on
 
 # 设置 HTTPS 代理
-sudo networksetup -setsecurewebproxy "Wi-Fi" 127.0.0.1 1080
+sudo networksetup -setsecurewebproxy "Wi-Fi" 127.0.0.1 10233
 sudo networksetup -setsecurewebproxystate "Wi-Fi" on
 
 # 关闭所有代理
@@ -134,16 +134,16 @@ sudo networksetup -setsecurewebproxystate "Wi-Fi" off
 2. 点击 **网络** → 选择当前连接（如 Wi-Fi）
 3. 点击 **详细信息...** → **代理**
 4. 勾选以下选项并填入配置：
-   - ✅ **网页代理 (HTTP)**：`127.0.0.1` 端口 `1080`
-   - ✅ **安全网页代理 (HTTPS)**：`127.0.0.1` 端口 `1080`
-   - ✅ **SOCKS 代理**：`127.0.0.1` 端口 `1080`
+   - ✅ **网页代理 (HTTP)**：`127.0.0.1` 端口 `10233`
+   - ✅ **安全网页代理 (HTTPS)**：`127.0.0.1` 端口 `10233`
+   - ✅ **SOCKS 代理**：`127.0.0.1` 端口 `10233`
 5. 点击「好」保存
 
 > 💡 **提示**：终端应用默认不走系统代理，需要设置环境变量：
 > ```bash
-> export http_proxy=http://127.0.0.1:1080
-> export https_proxy=http://127.0.0.1:1080
-> export all_proxy=socks5://127.0.0.1:1080
+> export http_proxy=http://127.0.0.1:10233
+> export https_proxy=http://127.0.0.1:10233
+> export all_proxy=socks5://127.0.0.1:10233
 > ```
 
 ---
@@ -289,10 +289,11 @@ sudoku://eyJoIjoiMS4yLjMuNCIsInAiOjEwMjMzLC...
   padding-max: 7
   custom-table: xpxvvpvv
   table-type: prefer_entropy
-  http-mask: true
-  http-mask-mode: auto
-  http-mask-tls: false
-  enable-pure-downlink: false
+	  http-mask: true
+	  http-mask-mode: auto
+	  http-mask-tls: false
+	  http-mask-multiplex: "on"
+	  enable-pure-downlink: false
 ```
 
 将此配置添加到你的 Clash 配置文件的 `proxies` 部分。
@@ -307,51 +308,6 @@ sudoku://eyJoIjoiMS4yLjMuNCIsInAiOjEwMjMzLC...
 - Ubuntu / Debian
 - CentOS / RHEL / AlmaLinux
 - Alpine Linux
-
-### WispByte 部署
-
-1. 创建一个 Linux 实例
-2. SSH 连接到实例
-3. 运行一键安装脚本：
-   ```bash
-   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
-   ```
-4. 保存输出的短链接和 Clash 配置
-
-### Cloudflare Workers / Vercel
-
-> ⚠️ **限制说明**
-
-Sudoku 协议基于 TCP，而 Cloudflare Workers 和 Vercel 仅支持 HTTP/WebSocket。因此**无法直接在这些 Serverless 平台上运行 Sudoku 服务端**。
-
-**替代方案：**
-
-1. **Cloudflare Tunnel（推荐）**
-   - 在 VPS 上运行 Sudoku 服务端
-   - 使用 `cloudflared` 创建隧道暴露服务
-   - 客户端通过 Cloudflare 域名连接
-
-2. **分流方案**
-   - Cloudflare Workers 可以作为流量分流器
-   - 将请求转发到后端 Sudoku 服务器
-
-### Render / Railway
-
-这些平台支持 Docker 容器，可以部署 Sudoku：
-
-```dockerfile
-FROM golang:1.22-alpine AS builder
-RUN apk add --no-cache git
-RUN git clone https://github.com/SUDOKU-ASCII/sudoku.git /app
-WORKDIR /app
-RUN go build -o sudoku ./cmd/sudoku-tunnel
-
-FROM alpine:latest
-COPY --from=builder /app/sudoku /usr/local/bin/
-COPY config.json /etc/sudoku/
-EXPOSE 10233
-CMD ["sudoku", "-c", "/etc/sudoku/config.json"]
-```
 
 ---
 
@@ -416,7 +372,7 @@ sudoku.exe -link "sudoku://your-short-link..."
 sudoku.exe -c client.json
 ```
 
-Client listens on `127.0.0.1:1080` (SOCKS5 + HTTP mixed proxy).
+Client listens on `127.0.0.1:10233` (SOCKS5 + HTTP mixed proxy).
 
 #### 3. Configure System Proxy
 
@@ -425,7 +381,7 @@ Client listens on `127.0.0.1:1080` (SOCKS5 + HTTP mixed proxy).
 ```cmd
 :: Enable proxy
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f
-reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /t REG_SZ /d "127.0.0.1:1080" /f
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /t REG_SZ /d "127.0.0.1:10233" /f
 
 :: Disable proxy
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f
@@ -436,7 +392,7 @@ reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v Pr
 ```powershell
 # Enable proxy
 Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable -Value 1
-Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyServer -Value "127.0.0.1:1080"
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyServer -Value "127.0.0.1:10233"
 
 # Disable proxy
 Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable -Value 0
@@ -449,7 +405,7 @@ Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet
 3. Under "Manual proxy setup", turn on the toggle
 4. Enter:
    - Address: `127.0.0.1`
-   - Port: `1080`
+   - Port: `10233`
 5. Click "Save"
 
 > 💡 **Note**: Some apps (terminals, games) don't use system proxy. Use Proxifier or configure SOCKS5 directly.
@@ -479,7 +435,7 @@ chmod +x sudoku
 ./sudoku -c client.json
 ```
 
-Client listens on `127.0.0.1:1080` (SOCKS5 + HTTP mixed proxy).
+Client listens on `127.0.0.1:10233` (SOCKS5 + HTTP mixed proxy).
 
 #### 3. Configure System Proxy
 
@@ -490,15 +446,15 @@ Client listens on `127.0.0.1:1080` (SOCKS5 + HTTP mixed proxy).
 networksetup -listallnetworkservices
 
 # Set SOCKS5 proxy (using Wi-Fi as example)
-sudo networksetup -setsocksfirewallproxy "Wi-Fi" 127.0.0.1 1080
+sudo networksetup -setsocksfirewallproxy "Wi-Fi" 127.0.0.1 10233
 sudo networksetup -setsocksfirewallproxystate "Wi-Fi" on
 
 # Set HTTP proxy
-sudo networksetup -setwebproxy "Wi-Fi" 127.0.0.1 1080
+sudo networksetup -setwebproxy "Wi-Fi" 127.0.0.1 10233
 sudo networksetup -setwebproxystate "Wi-Fi" on
 
 # Set HTTPS proxy
-sudo networksetup -setsecurewebproxy "Wi-Fi" 127.0.0.1 1080
+sudo networksetup -setsecurewebproxy "Wi-Fi" 127.0.0.1 10233
 sudo networksetup -setsecurewebproxystate "Wi-Fi" on
 
 # Disable all proxies
@@ -513,16 +469,16 @@ sudo networksetup -setsecurewebproxystate "Wi-Fi" off
 2. Click **Network** → Select current connection (e.g., Wi-Fi)
 3. Click **Details...** → **Proxies**
 4. Enable and configure:
-   - ✅ **Web Proxy (HTTP)**: `127.0.0.1` port `1080`
-   - ✅ **Secure Web Proxy (HTTPS)**: `127.0.0.1` port `1080`
-   - ✅ **SOCKS Proxy**: `127.0.0.1` port `1080`
+   - ✅ **Web Proxy (HTTP)**: `127.0.0.1` port `10233`
+   - ✅ **Secure Web Proxy (HTTPS)**: `127.0.0.1` port `10233`
+   - ✅ **SOCKS Proxy**: `127.0.0.1` port `10233`
 5. Click "OK"
 
 > 💡 **Note**: Terminal apps don't use system proxy. Set environment variables:
 > ```bash
-> export http_proxy=http://127.0.0.1:1080
-> export https_proxy=http://127.0.0.1:1080
-> export all_proxy=socks5://127.0.0.1:1080
+> export http_proxy=http://127.0.0.1:10233
+> export https_proxy=http://127.0.0.1:10233
+> export all_proxy=socks5://127.0.0.1:10233
 > ```
 
 ---
@@ -664,10 +620,11 @@ Use with client:
   padding-max: 7
   custom-table: xpxvvpvv
   table-type: prefer_entropy
-  http-mask: true
-  http-mask-mode: auto
-  http-mask-tls: false
-  enable-pure-downlink: false
+	  http-mask: true
+	  http-mask-mode: auto
+	  http-mask-tls: false
+	  http-mask-multiplex: "on"
+	  enable-pure-downlink: false
 ```
 
 Add to the `proxies` section of your Clash config.
@@ -682,17 +639,6 @@ Use the one-click script directly. Supports:
 - Ubuntu / Debian
 - CentOS / RHEL / AlmaLinux
 - Alpine Linux
-
-### Cloudflare Workers / Vercel
-
-> ⚠️ **Limitation**
-
-Sudoku uses TCP protocol. Cloudflare Workers and Vercel only support HTTP/WebSocket. **Cannot run Sudoku server directly on these platforms.**
-
-**Alternatives:**
-
-1. **Cloudflare Tunnel** - Run Sudoku on VPS, expose via `cloudflared`
-2. **Relay** - Use Workers as traffic relay to backend Sudoku server
 
 ---
 
