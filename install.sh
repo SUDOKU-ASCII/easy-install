@@ -96,6 +96,10 @@ NODE_YAML=""
 PKG_MANAGER=""
 SUDOKU_CORE_READY="false"
 WARP_ENABLED="false"
+SELINUX_ENABLED="false"
+SELINUX_ENFORCING="false"
+SELINUX_STATE="disabled"
+SELINUX_RESTORECON_WARNED="false"
 NONFATAL_ISSUES=()
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -393,6 +397,61 @@ detect_os() {
     success "Operating system: Linux"
 }
 
+detect_selinux() {
+    local mode=""
+
+    if command -v getenforce >/dev/null 2>&1; then
+        mode=$(getenforce 2>/dev/null || true)
+    elif command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled >/dev/null 2>&1; then
+        mode="Enforcing"
+    fi
+
+    case "${mode,,}" in
+        enforcing)
+            SELINUX_ENABLED="true"
+            SELINUX_ENFORCING="true"
+            SELINUX_STATE="enforcing"
+            ;;
+        permissive)
+            SELINUX_ENABLED="true"
+            SELINUX_STATE="permissive"
+            ;;
+        disabled)
+            SELINUX_STATE="disabled"
+            ;;
+        *)
+            if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled >/dev/null 2>&1; then
+                SELINUX_ENABLED="true"
+                SELINUX_STATE="enabled"
+            fi
+            ;;
+    esac
+
+    if [[ "${SELINUX_ENABLED}" == "true" ]]; then
+        info "SELinux detected (${SELINUX_STATE}); restoring file contexts for installed files."
+    fi
+}
+
+selinux_restore_contexts() {
+    [[ "${SELINUX_ENABLED}" == "true" ]] || return 0
+
+    if ! command -v restorecon >/dev/null 2>&1; then
+        if [[ "${SELINUX_RESTORECON_WARNED}" != "true" ]]; then
+            warn "SELinux is ${SELINUX_STATE}, but restorecon is unavailable; installed services may be denied by policy."
+            SELINUX_RESTORECON_WARNED="true"
+        fi
+        return 0
+    fi
+
+    local path=""
+    for path in "$@"; do
+        [[ -e "${path}" || -L "${path}" ]] || continue
+        if ! restorecon -RF "${path}" >/dev/null 2>&1; then
+            warn "Failed to restore SELinux context: ${path}"
+        fi
+    done
+}
+
 detect_arch() {
     local arch
     arch=$(uname -m)
@@ -520,6 +579,8 @@ ensure_cf_fallback_pydeps() {
         python3 -m pip install --no-cache-dir --upgrade --target "${FALLBACK_LIB_DIR}/pydeps" Flask Jinja2; then
         return 1
     fi
+
+    selinux_restore_contexts "${FALLBACK_LIB_DIR}"
 
     python3 -c "import sys; sys.path.insert(0, '${FALLBACK_LIB_DIR}/pydeps'); import flask, jinja2" >/dev/null 2>&1
 }
@@ -863,6 +924,8 @@ PY
 }
 JSON
     fi
+
+    selinux_restore_contexts "${FALLBACK_LIB_DIR}"
 }
 
 download_cf_fallback_vendor() {
@@ -903,6 +966,7 @@ download_cf_fallback_vendor() {
     mkdir -p "${FALLBACK_LIB_DIR}/cloudflare_error_page/templates"
     cp "${src_root}/resources/styles/main.css" "${FALLBACK_LIB_DIR}/cloudflare_error_page/templates/main.css"
     cp "${src_root}/examples/default.json" "${FALLBACK_LIB_DIR}/params.json"
+    selinux_restore_contexts "${FALLBACK_LIB_DIR}"
 
     rm -rf "${temp_dir}"
     return 0
@@ -936,6 +1000,7 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
+    selinux_restore_contexts "/etc/systemd/system/${FALLBACK_SERVICE_NAME}.service"
 }
 
 start_cf_fallback_service() {
@@ -1047,6 +1112,7 @@ download_binary() {
     # Install binary
     mv "${temp_dir}/sudoku" "${INSTALL_DIR}/sudoku"
     chmod +x "${INSTALL_DIR}/sudoku"
+    selinux_restore_contexts "${INSTALL_DIR}/sudoku"
     
     rm -rf "${temp_dir}"
     success "Installed to ${INSTALL_DIR}/sudoku"
@@ -1262,12 +1328,14 @@ migrate_legacy_httpmask_config_inplace() {
     chmod 600 "${tmp}" >/dev/null 2>&1 || true
     mv "${tmp}" "${path}"
     chmod 600 "${path}" >/dev/null 2>&1 || true
+    selinux_restore_contexts "${path}"
     return 0
 }
 
 update_kernel_only() {
     echo ""
     warn "Existing installation detected. Updating binary only (config preserved)."
+    selinux_restore_contexts "${INSTALL_DIR}/sudoku" "${CONFIG_DIR}"
     if [[ -f "${CONFIG_DIR}/config.json" ]]; then
         info "Config preserved: ${CONFIG_DIR}/config.json"
     fi
@@ -1332,6 +1400,7 @@ EXPORTED_SUBSCRIPTION_NODE_NAME=$(printf '%q' "${SUBSCRIPTION_NODE_NAME}")
 EXPORTED_SUBSCRIPTION_OUTPUT_FILE=$(printf '%q' "${SUBSCRIPTION_OUTPUT_FILE}")
 EOF
     chmod 600 "${EXPORT_STATE_FILE}"
+    selinux_restore_contexts "${CONFIG_DIR}" "${EXPORT_STATE_FILE}"
 }
 
 load_existing_config_context() {
@@ -1530,6 +1599,7 @@ create_config() {
 EOF
     
     chmod 600 "${CONFIG_DIR}/config.json"
+    selinux_restore_contexts "${CONFIG_DIR}" "${CONFIG_DIR}/config.json"
 
     info "Testing server configuration..."
     local test_output
@@ -1576,6 +1646,7 @@ ensure_wgcf_binary() {
     fi
     mv "${temp_file}" "${INSTALL_DIR}/wgcf"
     chmod 755 "${INSTALL_DIR}/wgcf"
+    selinux_restore_contexts "${INSTALL_DIR}/wgcf"
     success "wgcf installed to ${INSTALL_DIR}/wgcf"
 }
 
@@ -1600,6 +1671,7 @@ ensure_sudoku_sing_box_binary() {
     fi
     mv "${binary}" "${INSTALL_DIR}/sudoku-sing-box"
     chmod 755 "${INSTALL_DIR}/sudoku-sing-box"
+    selinux_restore_contexts "${INSTALL_DIR}/sudoku-sing-box"
     rm -rf "${temp_dir}"
     success "sudoku-sing-box installed to ${INSTALL_DIR}/sudoku-sing-box"
 }
@@ -1611,6 +1683,7 @@ ensure_warp_profile() {
     chmod 700 "${SUDOKU_WARP_DIR}"
 
     if [[ -f "${SUDOKU_WARP_PROFILE}" ]] && grep -q '^PrivateKey[[:space:]]*=' "${SUDOKU_WARP_PROFILE}" && grep -q '^PublicKey[[:space:]]*=' "${SUDOKU_WARP_PROFILE}"; then
+        selinux_restore_contexts "${SUDOKU_WARP_DIR}"
         success "Existing WARP profile found: ${SUDOKU_WARP_PROFILE}"
         return 0
     fi
@@ -1625,6 +1698,7 @@ ensure_warp_profile() {
         wgcf generate --profile "$(basename "${SUDOKU_WARP_PROFILE}")"
     )
     chmod 600 "${SUDOKU_WARP_DIR}/wgcf-account.toml" "${SUDOKU_WARP_PROFILE}" 2>/dev/null || true
+    selinux_restore_contexts "${SUDOKU_WARP_DIR}"
     success "WARP WireGuard profile generated"
 }
 
@@ -1786,6 +1860,7 @@ output_path.write_text(json.dumps(config, indent=2) + "\n")
 PY
 
     chmod 600 "${SING_BOX_CONFIG_FILE}"
+    selinux_restore_contexts "${SING_BOX_CONFIG_DIR}" "${SING_BOX_CONFIG_FILE}" "${SING_BOX_CACHE_DIR}"
     if ! sudoku-sing-box check -c "${SING_BOX_CONFIG_FILE}" >/tmp/sudoku-sing-box-check.log 2>&1; then
         cat /tmp/sudoku-sing-box-check.log >&2 || true
         error "sudoku-sing-box WARP config validation failed: ${SING_BOX_CONFIG_FILE}"
@@ -1813,6 +1888,7 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 EOF
+    selinux_restore_contexts "/etc/systemd/system/${SING_BOX_SERVICE_NAME}.service"
 }
 
 remove_legacy_warp_tun_service() {
@@ -1903,6 +1979,7 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
+    selinux_restore_contexts "/etc/systemd/system/${SERVICE_NAME}.service"
     
     systemctl daemon-reload
     systemctl enable "${SERVICE_NAME}" > /dev/null 2>&1
@@ -2155,6 +2232,7 @@ generate_subscription_config() {
     fi
 
     chmod 600 "${SUBSCRIPTION_OUTPUT_FILE}"
+    selinux_restore_contexts "${SUBSCRIPTION_OUTPUT_FILE}"
     rm -rf "${temp_dir}"
     success "Mihomo YAML generated: ${SUBSCRIPTION_OUTPUT_FILE}"
 }
@@ -2342,6 +2420,7 @@ main() {
     # Pre-flight checks
     check_root
     detect_os
+    detect_selinux
     detect_arch
     normalize_settings
     check_dependencies
