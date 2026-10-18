@@ -33,6 +33,13 @@
 #
 
 if [ -z "${BASH_VERSION:-}" ] || [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
+    # Alpine ships only busybox ash: fetch bash once and re-run ourselves with it.
+    if [ -z "${SUDOKU_BASH_REEXEC:-}" ] && [ -f "$0" ] && [ "$(id -u)" = "0" ] && command -v apk >/dev/null 2>&1; then
+        echo "[*] installing bash (apk)..." >&2
+        if apk add --no-cache bash >/dev/null 2>&1; then
+            SUDOKU_BASH_REEXEC=1 exec bash "$0" "$@"
+        fi
+    fi
     echo "[x] bash >= 4 is required (found: ${BASH_VERSION:-none})." >&2
     exit 1
 fi
@@ -79,6 +86,9 @@ CONFIG_DIR="${SUDOKU_CONFIG_DIR:-/etc/sudoku}"
 SYSTEMD_DIR="${SUDOKU_SYSTEMD_DIR:-/etc/systemd/system}"
 SYSTEMCTL="${SUDOKU_SYSTEMCTL:-systemctl}"
 JOURNALCTL="${SUDOKU_JOURNALCTL:-journalctl}"
+OPENRC_DIR="${SUDOKU_OPENRC_DIR:-/etc/init.d}"
+LOG_DIR="${SUDOKU_LOG_DIR:-/var/log}"
+INIT_SYSTEM="systemd"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 EXPORT_STATE_FILE="${CONFIG_DIR}/export-state.env"
 VERSIONS_FILE="${CONFIG_DIR}/versions.env"
@@ -742,10 +752,120 @@ normalize_settings() {
 
 dev_mode() { [[ "${SUDOKU_DEV:-}" == "1" ]]; }
 
+# ── Init system abstraction: systemd (default) or OpenRC (Alpine). ───────────────
+# On OpenRC, SYSTEMCTL / JOURNALCTL point at small shims so the rest of the script
+# keeps speaking "systemctl" and "journalctl".
+openrc_ctl() { # systemctl-style verbs mapped onto rc-service / rc-update
+    local verb="${1:-}" name
+    shift || true
+    case "${verb}" in
+        daemon-reload|reset-failed) return 0 ;;
+        enable) rc-update add "$1" default >/dev/null 2>&1 ;;
+        disable) rc-update del "$1" default >/dev/null 2>&1 || true ;;
+        start|stop|restart) rc-service "$1" "${verb}" >/dev/null ;;
+        is-active)
+            [[ "${1:-}" == "--quiet" ]] && shift
+            rc-service "$1" status >/dev/null 2>&1
+            ;;
+        show) # show -p MainPID --value <name>
+            name="${*: -1}"
+            cat "/run/${name}.pid" 2>/dev/null || echo 0
+            ;;
+        *) return 0 ;;
+    esac
+}
+
+openrc_logs() { # journalctl-style: -u <name> [-n N] [-f] [--since X] [-o X] [--no-pager]
+    local name="" n=50 follow=0 since=0 file
+    while (($# > 0)); do
+        case "$1" in
+            -u) name="${2:-}"; shift ;;
+            -n) n="${2:-50}"; shift ;;
+            -f) follow=1 ;;
+            --since) since=1; shift ;;
+            -o) shift ;;
+        esac
+        shift
+    done
+    file="${LOG_DIR}/${name}.log"
+    [[ -f "${file}" ]] || return 0
+    if ((follow)); then tail -n "${n}" -f "${file}"
+    elif ((since)); then tail -n 20000 "${file}"
+    else tail -n "${n}" "${file}"; fi
+}
+
+init_is_openrc() { [[ "${INIT_SYSTEM}" == "openrc" ]]; }
+
+case "${SUDOKU_INIT:-auto}" in
+    openrc) INIT_SYSTEM="openrc" ;;
+    auto) if [[ -z "${SUDOKU_SYSTEMCTL:-}" && ! -d /run/systemd/system ]] && command -v rc-service >/dev/null 2>&1; then INIT_SYSTEM="openrc"; fi ;;
+esac
+if init_is_openrc; then
+    SYSTEMCTL="openrc_ctl"
+    JOURNALCTL="openrc_logs"
+fi
+
+unit_path() { # <service-name>
+    if init_is_openrc; then printf '%s/%s' "${OPENRC_DIR}" "$1"; else printf '%s/%s.service' "${SYSTEMD_DIR}" "$1"; fi
+}
+
+# <name> <description> <command> <args> [workdir]  -> OpenRC init script (+ logrotate when available)
+write_openrc_unit() {
+    local name="$1" desc="$2" cmd="$3" args="$4" dir="${5:-}"
+    mkdir -p "${OPENRC_DIR}" "${LOG_DIR}"
+    {
+        echo '#!/sbin/openrc-run'
+        printf 'description="%s"\n' "${desc}"
+        printf 'command="%s"\n' "${cmd}"
+        printf 'command_args="%s"\n' "${args}"
+        echo 'command_background=true'
+        echo 'pidfile="/run/${RC_SVCNAME}.pid"'
+        printf 'output_log="%s/%s.log"\n' "${LOG_DIR}" "${name}"
+        printf 'error_log="%s/%s.log"\n' "${LOG_DIR}" "${name}"
+        [[ -n "${dir}" ]] && printf 'directory="%s"\n' "${dir}"
+        printf '\ndepend() {\n    use net\n    after firewall\n}\n'
+    } >"${OPENRC_DIR}/${name}"
+    chmod 755 "${OPENRC_DIR}/${name}"
+    if [[ -d /etc/logrotate.d ]]; then
+        printf '%s/%s.log {\n    weekly\n    rotate 2\n    compress\n    missingok\n    notifempty\n    copytruncate\n}\n' "${LOG_DIR}" "${name}" >"/etc/logrotate.d/${name}"
+    fi
+}
+
 detect_os() {
     if [[ "$(uname)" != "Linux" ]] && ! dev_mode; then
         die "$(L '此脚本仅支持 Linux 服务器。' 'This script only supports Linux servers.')"
     fi
+}
+
+# SELinux: files moved from /tmp keep their temporary label, and systemd then
+# refuses to exec / read them on enforcing hosts (RHEL, Rocky, Alma, Fedora…).
+# Restore the default contexts right before anything is (re)started.
+SELINUX_ACTIVE=""
+selinux_active() {
+    if [[ -z "${SELINUX_ACTIVE}" ]]; then
+        SELINUX_ACTIVE=0
+        if dev_mode; then :
+        elif command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled >/dev/null 2>&1; then SELINUX_ACTIVE=1
+        elif command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null)" =~ ^(Enforcing|Permissive)$ ]]; then SELINUX_ACTIVE=1
+        fi
+    fi
+    ((SELINUX_ACTIVE == 1))
+}
+
+selinux_restore() {
+    selinux_active || return 0
+    if ! command -v restorecon >/dev/null 2>&1; then
+        warn "$(L 'SELinux 已启用但缺少 restorecon，服务可能被策略拒绝（请安装 policycoreutils）。' 'SELinux is on but restorecon is missing; services may be denied (install policycoreutils).')"
+        SELINUX_ACTIVE=0
+        return 0
+    fi
+    local path
+    for path in "${INSTALL_DIR}/sudoku" "${INSTALL_DIR}/sudoku-sing-box" "${INSTALL_DIR}/wgcf" "${INSTALL_DIR}/sudoku-dash" \
+        "${CONFIG_DIR}" "${SING_BOX_CONFIG_DIR}" "${SING_BOX_CACHE_DIR}" "${FALLBACK_LIB_DIR}" \
+        "${SYSTEMD_DIR}/${SERVICE_NAME}.service" "${SYSTEMD_DIR}/${SING_BOX_SERVICE_NAME}.service" "${SYSTEMD_DIR}/${FALLBACK_SERVICE_NAME}.service"; do
+        [[ -e "${path}" || -L "${path}" ]] || continue
+        restorecon -RF "${path}" >/dev/null 2>&1 || true
+    done
 }
 
 detect_arch() {
@@ -800,6 +920,8 @@ install_missing_deps() {
             yum|dnf) missing+=(iproute) ;;
         esac
     fi
+    if [[ -z "${PKG_MANAGER}" ]]; then detect_pkg_manager >/dev/null 2>&1 || true; fi
+    if [[ "${PKG_MANAGER}" == "apk" && ! -s /etc/ssl/certs/ca-certificates.crt ]]; then missing+=(ca-certificates); fi
     ((${#missing[@]} == 0)) && return 0
     install_packages "${missing[@]}"
 }
@@ -809,7 +931,7 @@ check_dependencies() {
     for cmd in curl jq python3 openssl; do
         command -v "${cmd}" &>/dev/null || missing+=("${cmd}")
     done
-    if ((${#missing[@]} > 0)) || ! command -v ss &>/dev/null; then
+    if ((${#missing[@]} > 0)) || ! command -v ss &>/dev/null || { command -v apk >/dev/null 2>&1 && [[ ! -s /etc/ssl/certs/ca-certificates.crt ]]; }; then
         ui_run "$(L "安装依赖: ${missing[*]:-iproute2}" "Installing dependencies: ${missing[*]:-iproute2}")" install_missing_deps \
             || die "$(L '依赖安装失败，请手动安装 curl jq python3 openssl。' 'Dependency installation failed; install curl jq python3 openssl manually.')"
     fi
@@ -950,7 +1072,7 @@ ensure_wgcf_binary() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 service_file_exists() { # <name>
-    [[ -f "${SYSTEMD_DIR}/${1}.service" || -f "/lib/systemd/system/${1}.service" || -f "/usr/lib/systemd/system/${1}.service" ]]
+    [[ -f "${SYSTEMD_DIR}/${1}.service" || -f "${OPENRC_DIR}/${1}" || -f "/lib/systemd/system/${1}.service" || -f "/usr/lib/systemd/system/${1}.service" ]]
 }
 
 has_existing_install() {
@@ -1178,6 +1300,10 @@ remove_firewall_rule() { # <port>
 }
 
 create_sudoku_service() {
+    if init_is_openrc; then
+        write_openrc_unit "${SERVICE_NAME}" "Sudoku Proxy Server" "${INSTALL_DIR}/sudoku" "-c ${CONFIG_FILE}"
+        return
+    fi
     cat >"${SYSTEMD_DIR}/${SERVICE_NAME}.service" <<EOF
 [Unit]
 Description=Sudoku Proxy Server
@@ -1196,6 +1322,11 @@ EOF
 }
 
 create_sing_box_service() {
+    if init_is_openrc; then
+        write_openrc_unit "${SING_BOX_SERVICE_NAME}" "Sudoku sing-box server with WARP egress" "${INSTALL_DIR}/sudoku-sing-box" \
+            "run -c ${SING_BOX_CONFIG_FILE} -D ${SING_BOX_CACHE_DIR}"
+        return
+    fi
     cat >"${SYSTEMD_DIR}/${SING_BOX_SERVICE_NAME}.service" <<EOF
 [Unit]
 Description=Sudoku sing-box server with WARP egress
@@ -1222,16 +1353,18 @@ create_service() {
     if [[ "${WARP_ENABLED}" == "true" ]]; then
         "${SYSTEMCTL}" disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
         "${SYSTEMCTL}" stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
-        rm -f "${SYSTEMD_DIR}/${SERVICE_NAME}.service"
+        rm -f "$(unit_path "${SERVICE_NAME}")"
         create_sing_box_service
+        selinux_restore
         "${SYSTEMCTL}" daemon-reload
         "${SYSTEMCTL}" enable "${SING_BOX_SERVICE_NAME}" >/dev/null 2>&1 || true
         "${SYSTEMCTL}" restart "${SING_BOX_SERVICE_NAME}" || return 1
     else
         "${SYSTEMCTL}" disable "${SING_BOX_SERVICE_NAME}" >/dev/null 2>&1 || true
         "${SYSTEMCTL}" stop "${SING_BOX_SERVICE_NAME}" >/dev/null 2>&1 || true
-        rm -f "${SYSTEMD_DIR}/${SING_BOX_SERVICE_NAME}.service"
+        rm -f "$(unit_path "${SING_BOX_SERVICE_NAME}")"
         create_sudoku_service
+        selinux_restore
         "${SYSTEMCTL}" daemon-reload
         "${SYSTEMCTL}" enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
         "${SYSTEMCTL}" restart "${SERVICE_NAME}" || return 1
@@ -1257,6 +1390,7 @@ svc_restart() {
     local port
     have_systemctl || return 1
     port=$(cfg_get .local_port)
+    selinux_restore
     "${SYSTEMCTL}" daemon-reload >/dev/null 2>&1 || true
     "${SYSTEMCTL}" restart "$(svc_name)" || return 1
     if [[ -n "${port}" ]]; then
@@ -1619,6 +1753,11 @@ write_cf_fallback_service() {
     local bind="${1:-}" port="${2:-}" pybin
     pybin=$(command -v python3 2>/dev/null || true)
     [[ -n "${pybin}" ]] || return 1
+    if init_is_openrc; then
+        write_openrc_unit "${FALLBACK_SERVICE_NAME}" "Sudoku Cloudflare 500 Error Page Fallback" "${pybin}" \
+            "${FALLBACK_LIB_DIR}/server.py --bind ${bind} --port ${port} --params ${FALLBACK_LIB_DIR}/params.json" "${FALLBACK_LIB_DIR}"
+        return
+    fi
     cat >"${SYSTEMD_DIR}/${FALLBACK_SERVICE_NAME}.service" <<EOF
 [Unit]
 Description=Sudoku Cloudflare 500 Error Page Fallback
@@ -1645,6 +1784,7 @@ start_cf_fallback_service() {
     have_systemctl || return 1
     [[ -f "${FALLBACK_LIB_DIR}/server.py" && -f "${FALLBACK_LIB_DIR}/params.json" ]] || return 1
     write_cf_fallback_service "${bind}" "${port}" || return 1
+    selinux_restore
     "${SYSTEMCTL}" daemon-reload >/dev/null 2>&1 || true
     "${SYSTEMCTL}" stop "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
     "${SYSTEMCTL}" reset-failed "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
@@ -1673,7 +1813,7 @@ setup_cf_fallback() {
     if [[ -z "${selected_port}" ]]; then
         "${SYSTEMCTL}" stop "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
         "${SYSTEMCTL}" disable "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
-        rm -f "${SYSTEMD_DIR}/${FALLBACK_SERVICE_NAME}.service"
+        rm -f "$(unit_path "${FALLBACK_SERVICE_NAME}")"
         "${SYSTEMCTL}" daemon-reload >/dev/null 2>&1 || true
         echo "fallback page failed to start; using fallback_address=${SUDOKU_FALLBACK}" >&2
         return 1
@@ -2222,7 +2362,7 @@ run_install() {
     detect_os
     detect_arch
     ensure_root "${ORIG_ARGS[@]}"
-    have_systemctl || dev_mode || die "$(L '需要 systemd（找不到 systemctl）。' 'systemd is required (systemctl not found).')"
+    have_systemctl || dev_mode || die "$(L '需要 systemd 或 OpenRC（找不到 systemctl / rc-service）。' 'systemd or OpenRC is required (no systemctl / rc-service found).')"
     normalize_settings
 
     show_header
@@ -2370,7 +2510,7 @@ do_uninstall() { # <purge: 1|0>
         for s in "${SERVICE_NAME}" "${SING_BOX_SERVICE_NAME}" "${FALLBACK_SERVICE_NAME}"; do
             "${SYSTEMCTL}" stop "${s}" >/dev/null 2>&1 || true
             "${SYSTEMCTL}" disable "${s}" >/dev/null 2>&1 || true
-            rm -f "${SYSTEMD_DIR}/${s}.service"
+            rm -f "$(unit_path "${s}")" "${LOG_DIR}/${s}.log" "/etc/logrotate.d/${s}"
         done
         cleanup_legacy_subscription_https
         remove_legacy_warp_tun_service
@@ -2430,7 +2570,14 @@ proc_ticks() { # <pid> -> utime+stime ticks
 proc_rss() { awk '/^VmRSS:/ {print $2 * 1024}' "/proc/${1}/status" 2>/dev/null; }
 proc_threads() { awk '/^Threads:/ {print $2}' "/proc/${1}/status" 2>/dev/null; }
 proc_fds() { find "/proc/${1}/fd" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' '; }
-proc_uptime() { ps -o etimes= -p "${1}" 2>/dev/null | tr -d ' '; }
+proc_uptime() { # busybox ps has no etimes: derive from /proc
+    local start up hz=100
+    start=$(sed 's/^.*) //' "/proc/${1}/stat" 2>/dev/null | awk '{print $20}')
+    up=$(awk '{print int($1)}' /proc/uptime 2>/dev/null)
+    [[ "${start}" =~ ^[0-9]+$ && "${up}" =~ ^[0-9]+$ ]] || return 0
+    command -v getconf >/dev/null 2>&1 && hz=$(getconf CLK_TCK 2>/dev/null || echo 100)
+    echo $((up - start / hz))
+}
 
 conn_count() { # <port>
     ss -H -tn "( sport = :${1} )" 2>/dev/null | awk '$1 == "ESTAB" {n++} END {print n + 0}'
@@ -2659,7 +2806,7 @@ user_speed_text() { # down up
 users_table() {
     local i=0 alias key down up data blocked state lim quota sess hdr
     printf -v hdr '%s %s %s %s %s %s %s' "$(pad_right '#' 2)" "$(pad_right "$(L '用户' 'User')" 14)" "$(pad_right 'Key' 9)" \
-        "$(pad_right "$(L '限速' 'Speed')" 12)" "$(pad_right "$(L '流量' 'Quota')" 7)" "$(pad_right "$(L '状态' 'State')" 8)" "$(L '24h会话' '24h')"
+        "$(pad_right "$(L '限速' 'Speed')" 12)" "$(pad_right "$(L '流量' 'Quota')" 7)" "$(pad_right "$(L '状态' 'State')" 8)" "$(if init_is_openrc; then L '会话' 'Sess'; else L '24h会话' '24h'; fi)"
     box_top "$(L '用户' 'Users')"
     box_row "${C_DIM}${hdr}${C_RESET}"
     box_sep
@@ -2687,7 +2834,7 @@ user_detail() { # <index>
         kv "$(L '限速' 'Speed')" "$(user_speed_text "$(user_field "${i}" '.bandwidth[0]')" "$(user_field "${i}" '.bandwidth[1]')")"
         kv "$(L '流量上限' 'Quota')" "$(user_field "${i}" '.data' | sed 's/^$/∞/') GB"
         kv "$(L '状态' 'State')" "$([[ "${blocked}" == "true" ]] && L '已封禁' 'blocked' || L '正常' 'active')"
-        kv "$(L '24h 会话' 'Sessions 24h')" "${ACT_N[${alias}]:-0}"
+        kv "$(if init_is_openrc; then L '会话（日志）' 'Sessions (log)'; else L '24h 会话' 'Sessions 24h'; fi)" "${ACT_N[${alias}]:-0}"
         kv "$(L '最近活动' 'Last seen')" "${ACT_LAST[${alias}]:--}"
         box_bottom
         dim "  $(L '提示: 内核不上报单用户字节数，这里仅展示会话统计。' 'Note: the core does not report per-user bytes; sessions are derived from logs.')"
@@ -3101,7 +3248,7 @@ service_screen() {
             0) ui_run "$(L '重启服务' 'Restarting')" svc_restart || true; ui_pause ;;
             1)
                 if svc_is_active; then ui_run "$(L '停止服务' 'Stopping')" "${SYSTEMCTL}" stop "${svc}" || true
-                else ui_run "$(L '启动服务' 'Starting')" "${SYSTEMCTL}" start "${svc}" || true; fi
+                else selinux_restore; ui_run "$(L '启动服务' 'Starting')" "${SYSTEMCTL}" start "${svc}" || true; fi
                 ui_pause ;;
             2) printf '\n'; "${JOURNALCTL}" -u "${svc}" -n 40 --no-pager 2>&1 | cut -c1-150 || true; ui_pause ;;
             3)

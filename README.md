@@ -9,7 +9,7 @@
 
 ### 一键安装
 
-在 Linux 服务器（systemd，amd64 / arm64）上以 root 运行：
+在 Linux 服务器（systemd 或 OpenRC/Alpine，amd64 / arm64）上以 root 运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh -o /tmp/sudoku-dash.sh && sudo bash /tmp/sudoku-dash.sh
@@ -32,6 +32,14 @@ sudo sudoku-dash
 - **服务控制 / 设置**：重启、停止、查看与跟随日志、改端口、开关 WARP、改公网地址
 
 > 非交互环境（`curl … | sudo bash`、CI）会自动采用默认值，不弹任何提问。
+
+**Alpine / NAT 小鸡**：Alpine 默认没有 curl 和 bash，先装一下（脚本会自己用 `apk` 补装 bash、python3、jq、openssl、iproute2、ca-certificates，服务以 OpenRC 方式注册，日志在 `/var/log/<服务名>.log`）：
+
+```bash
+apk add --no-cache curl bash && curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh -o /tmp/sudoku-dash.sh && bash /tmp/sudoku-dash.sh
+```
+
+NAT 机器只有映射好的那几个端口可用：向导里端口填映射到本机的端口（或 `SUDOKU_PORT=…`），分享链接里的地址用 `SERVER_IP=<NAT 公网地址>` 指定。
 
 ### 环境变量
 
@@ -136,7 +144,7 @@ sudo bash /tmp/sudoku-dash.sh --uninstall
 
 ### One-line install
 
-Run as root on a Linux server (systemd, amd64 / arm64):
+Run as root on a Linux server (systemd or OpenRC/Alpine, amd64 / arm64):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh -o /tmp/sudoku-dash.sh && sudo bash /tmp/sudoku-dash.sh
@@ -157,6 +165,14 @@ sudo sudoku-dash
 - **Service / settings**: restart, stop, view and follow logs, change port, toggle WARP, change public host
 
 > Non-interactive runs (`curl … | sudo bash`, CI) take the defaults and never prompt.
+
+**Alpine / NAT boxes**: Alpine ships without curl and bash, so install them first (the script pulls in python3, jq, openssl, iproute2 and ca-certificates itself via `apk`, registers the services with OpenRC, and logs to `/var/log/<service>.log`):
+
+```bash
+apk add --no-cache curl bash && curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh -o /tmp/sudoku-dash.sh && bash /tmp/sudoku-dash.sh
+```
+
+On NAT hosts only the forwarded ports work: enter a forwarded port in the wizard (or `SUDOKU_PORT=…`) and set `SERVER_IP=<NAT public address>` for the share links.
 
 ### Environment variables
 
