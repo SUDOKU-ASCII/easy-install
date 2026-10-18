@@ -1,54 +1,63 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
-# Sudoku Server One-Click Installation Script
-# https://github.com/SUDOKU-ASCII/sudoku
+# Sudoku easy-install & dash
+# One-click installer + a repeatable terminal TUI to manage your Sudoku server.
+# https://github.com/SUDOKU-ASCII/easy-install
 #
-# Usage:
+# Install (or open dash when already installed):
 #   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
-# Uninstall:
-#   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)" -- --uninstall
+# Afterwards, manage everything any time with:
+#   sudo sudoku-dash
 #
-# Environment Variables:
-#   SUDOKU_PORT      - Server port (default: random available port in 50001-65535)
-#   SUDOKU_CLIENT_PORT - Client local proxy port used in exported short link (default: 10233)
-#   SUDOKU_FALLBACK  - Fallback address (default: 127.0.0.1:80)
-#   SUDOKU_CF_FALLBACK - Enable CF 500 error page fallback service (default: true)
-#   SUDOKU_CF_FALLBACK_BIND - Bind address for CF fallback service (default: 127.0.0.1)
-#   SUDOKU_CF_FALLBACK_PORT - Preferred port for CF fallback service (default: 10232)
-#   SUDOKU_CF_FALLBACK_FALLBACK_PORT - Port to try when preferred port fails (default: 80)
-#   SUDOKU_CF_FALLBACK_FORCE - Force override SUDOKU_FALLBACK when CF fallback starts (default: false)
-#   SERVER_IP        - Override public host/IP used in short link & exported Sudoku node (default: auto-detect)
-#   SUDOKU_HTTP_MASK - Enable HTTP mask (default: true)
-#   SUDOKU_HTTP_MASK_MODE - HTTP mask mode: auto/stream/poll/legacy/ws (server default: auto)
-#   SUDOKU_HTTP_MASK_TLS  - Use HTTPS in HTTP mask tunnel modes (default: false)
-#   SUDOKU_HTTP_MASK_MULTIPLEX - HTTP mask mux: off/auto/on (default: on)
-#   SUDOKU_HTTP_MASK_HOST - Override HTTP Host/SNI in tunnel modes (default: empty)
-#   SUDOKU_HTTP_MASK_PATH_ROOT - Optional first-level path prefix for HTTP mask/tunnel endpoints (default: random 6-10 lowercase letters)
-#   SUDOKU_SUBSCRIPTION_PATH - Local Mihomo YAML output path (default: /etc/sudoku/subscription.yaml)
-#   SUDOKU_SUBSCRIPTION_NODE_NAME - Node name used inside generated Mihomo YAML (default: sudoku)
-#   SUDOKU_SUBSCRIPTION_TEMPLATE_URL - Optional remote YAML template used as the subscription base
-#   SUDOKU_WARP     - Serve Sudoku with sudoku-sing-box and route all proxied traffic through WARP (default: false)
+# Sub-commands (append after the script, e.g.  bash -c "$(curl -fsSL URL)" _ --upgrade):
+#   install | dash | status | --upgrade | --uninstall | --help | --version
+#
+# SUDOKU-DASH-MARKER
+#
+# Environment variables (all optional):
+#   SUDOKU_PORT          Server port (default: random free port in 50001-65535)
+#   SUDOKU_WARP          Route all proxied traffic through Cloudflare WARP (default: false)
+#   SUDOKU_VERSION       Sudoku kernel tag to install (default: latest release)
+#   SUDOKU_YES           1 = never prompt, accept defaults / env values (default: auto, no TTY => 1)
+#   SUDOKU_LANG          UI language: zh | en (default: from $LANG)
+#   SERVER_IP            Public host/IP written into share links (default: auto-detect)
+#   SUDOKU_CLIENT_PORT   Local proxy port inside exported client config (default: 10233)
+#   SUDOKU_FALLBACK      Fallback address for suspicious traffic (default: built-in Cloudflare-style 500 page)
+#   SUDOKU_CF_FALLBACK   Run the built-in Cloudflare-style 500 page (default: true)
+#   SUDOKU_HTTP_MASK, SUDOKU_HTTP_MASK_MODE, SUDOKU_HTTP_MASK_TLS, SUDOKU_HTTP_MASK_HOST,
+#   SUDOKU_HTTP_MASK_PATH_ROOT, SUDOKU_HTTP_MASK_MULTIPLEX   Advanced HTTP-mask tuning
+#   SUDOKU_SUBSCRIPTION_PATH / _NODE_NAME / _TEMPLATE_URL    Local Mihomo YAML output
+#   SUDOKU_REPO          Override kernel repository (default: SUDOKU-ASCII/sudoku)
 #
 
-set -e
+if [ -z "${BASH_VERSION:-}" ] || [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
+    echo "[x] bash >= 4 is required (found: ${BASH_VERSION:-none})." >&2
+    exit 1
+fi
+shopt -s extglob
+set -o pipefail
+export PATH="${PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Configuration Defaults
+# Configuration
 # ═══════════════════════════════════════════════════════════════════════════════
+
+DASH_VERSION="1.0.0"
 
 SUDOKU_PORT="${SUDOKU_PORT:-}"
+SUDOKU_VERSION="${SUDOKU_VERSION:-}"
 SUDOKU_CLIENT_PORT_INPUT="${SUDOKU_CLIENT_PORT:-}"
 SUDOKU_CLIENT_PORT="${SUDOKU_CLIENT_PORT:-10233}"
 DEFAULT_SUDOKU_FALLBACK="127.0.0.1:80"
 SUDOKU_FALLBACK="${SUDOKU_FALLBACK:-${DEFAULT_SUDOKU_FALLBACK}}"
 SUDOKU_REPO="${SUDOKU_REPO:-SUDOKU-ASCII/sudoku}"
+SING_BOX_REPO="${SUDOKU_SING_BOX_REPO:-SUDOKU-ASCII/sudoku-sing-box}"
+DASH_URL="${SUDOKU_DASH_URL:-https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh}"
 SUDOKU_CF_FALLBACK="${SUDOKU_CF_FALLBACK:-true}"
 SUDOKU_CF_FALLBACK_BIND="${SUDOKU_CF_FALLBACK_BIND:-127.0.0.1}"
 SUDOKU_CF_FALLBACK_PORT="${SUDOKU_CF_FALLBACK_PORT:-10232}"
 SUDOKU_CF_FALLBACK_FALLBACK_PORT="${SUDOKU_CF_FALLBACK_FALLBACK_PORT:-80}"
 SUDOKU_CF_FALLBACK_FORCE="${SUDOKU_CF_FALLBACK_FORCE:-false}"
-SUDOKU_CF_FALLBACK_REPO="${SUDOKU_CF_FALLBACK_REPO:-donlon/cloudflare-error-page}"
-SUDOKU_CF_FALLBACK_BRANCH="${SUDOKU_CF_FALLBACK_BRANCH:-main}"
 SUDOKU_HTTP_MASK="${SUDOKU_HTTP_MASK:-true}"
 SUDOKU_HTTP_MASK_MODE="${SUDOKU_HTTP_MASK_MODE:-auto}"
 SUDOKU_HTTP_MASK_TLS="${SUDOKU_HTTP_MASK_TLS:-false}"
@@ -58,24 +67,35 @@ SUDOKU_HTTP_MASK_PATH_ROOT="${SUDOKU_HTTP_MASK_PATH_ROOT:-}"
 SUDOKU_SUBSCRIPTION_PATH="${SUDOKU_SUBSCRIPTION_PATH:-}"
 SUDOKU_SUBSCRIPTION_NODE_NAME="${SUDOKU_SUBSCRIPTION_NODE_NAME:-sudoku}"
 SUDOKU_SUBSCRIPTION_TEMPLATE_URL="${SUDOKU_SUBSCRIPTION_TEMPLATE_URL:-}"
+SUDOKU_WARP_PRESET="${SUDOKU_WARP+x}${SUDOKU_WARP_GOOGLE+x}"
 SUDOKU_WARP="${SUDOKU_WARP:-${SUDOKU_WARP_GOOGLE:-false}}"
-INSTALL_DIR="/usr/local/bin"
-CONFIG_DIR="/etc/sudoku"
+
+INSTALL_DIR="${SUDOKU_INSTALL_DIR:-/usr/local/bin}"
+CONFIG_DIR="${SUDOKU_CONFIG_DIR:-/etc/sudoku}"
+SYSTEMD_DIR="${SUDOKU_SYSTEMD_DIR:-/etc/systemd/system}"
+SYSTEMCTL="${SUDOKU_SYSTEMCTL:-systemctl}"
+JOURNALCTL="${SUDOKU_JOURNALCTL:-journalctl}"
+CONFIG_FILE="${CONFIG_DIR}/config.json"
 EXPORT_STATE_FILE="${CONFIG_DIR}/export-state.env"
+VERSIONS_FILE="${CONFIG_DIR}/versions.env"
+APPLIED_FILE="${CONFIG_DIR}/.applied"
+BACKUP_DIR="${CONFIG_DIR}/backup"
+DASH_BIN="${INSTALL_DIR}/sudoku-dash"
 SERVICE_NAME="sudoku"
 FALLBACK_SERVICE_NAME="sudoku-fallback"
-FALLBACK_LIB_DIR="/usr/local/lib/sudoku-fallback"
+FALLBACK_LIB_DIR="${SUDOKU_FALLBACK_LIB_DIR:-/usr/local/lib/sudoku-fallback}"
 LEGACY_SUBSCRIPTION_SERVICE_NAME="sudoku-subscription"
 LEGACY_SUBSCRIPTION_ACME_TIMER_NAME="sudoku-acme-renew.timer"
 LEGACY_SUBSCRIPTION_LIB_DIR="/usr/local/lib/sudoku-subscription"
 LEGACY_SUBSCRIPTION_CERT_DIR="${CONFIG_DIR}/subscription-cert"
 SING_BOX_SERVICE_NAME="sudoku-sing-box"
-SING_BOX_CONFIG_DIR="/etc/sing-box"
+SING_BOX_CONFIG_DIR="${SUDOKU_SING_BOX_CONFIG_DIR:-/etc/sing-box}"
 SING_BOX_CONFIG_FILE="${SING_BOX_CONFIG_DIR}/sudoku-warp.json"
-SING_BOX_CACHE_DIR="/var/lib/sudoku-sing-box"
+SING_BOX_CACHE_DIR="${SUDOKU_SING_BOX_CACHE_DIR:-/var/lib/sudoku-sing-box}"
 SUDOKU_WARP_DIR="${CONFIG_DIR}/warp"
 SUDOKU_WARP_PROFILE="${SUDOKU_WARP_DIR}/wgcf-profile.conf"
 DEFAULT_ASCII_MODE="up_ascii_down_entropy"
+
 CUSTOM_TABLE=""
 DISABLE_HTTP_MASK="false"
 HTTP_MASK_MODE="auto"
@@ -93,43 +113,112 @@ SUBSCRIPTION_NODE_NAME="sudoku"
 SUBSCRIPTION_OUTPUT_FILE=""
 SUBSCRIPTION_TEMPLATE_URL=""
 NODE_YAML=""
+SHORT_LINK=""
 PKG_MANAGER=""
-SUDOKU_CORE_READY="false"
 WARP_ENABLED="false"
+AVAILABLE_PRIVATE_KEY=""
+MASTER_PUBLIC_KEY=""
+SERVER_IP="${SERVER_IP:-}"
+ARCH=""
 NONFATAL_ISSUES=()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Color Output
+# Locale / language / glyphs / colors
 # ═══════════════════════════════════════════════════════════════════════════════
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-BOLD='\033[1m'
+ORIG_LOCALE_HINT="${SUDOKU_LANG:-${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}}"
+UI_UTF8=0
+UI_LANG="en"
 
-print_banner() {
-    echo -e "${CYAN}"
-    cat << 'EOF'
-  ███████╗██╗   ██╗██████╗  ██████╗ ██╗  ██╗██╗   ██╗
-  ██╔════╝██║   ██║██╔══██╗██╔═══██╗██║ ██╔╝██║   ██║
-  ███████╗██║   ██║██║  ██║██║   ██║█████╔╝ ██║   ██║
-  ╚════██║██║   ██║██║  ██║██║   ██║██╔═██╗ ██║   ██║
-  ███████║╚██████╔╝██████╔╝╚██████╔╝██║  ██╗╚██████╔╝
-  ╚══════╝ ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝
-EOF
-    echo -e "${NC}"
-    echo -e "${BOLD}  One-Click Server Installation Script${NC}"
-    echo ""
+setup_locale() {
+    local cm l
+    cm=$(locale charmap 2>/dev/null || true)
+    if [[ "${cm}" != "UTF-8" ]]; then
+        for l in C.UTF-8 en_US.UTF-8 C.utf8 en_US.utf8; do
+            if LC_ALL="${l}" locale charmap 2>/dev/null | grep -qi 'utf-8'; then
+                export LC_ALL="${l}"
+                cm="UTF-8"
+                break
+            fi
+        done
+    fi
+    if [[ "${cm}" == "UTF-8" ]]; then
+        UI_UTF8=1
+    fi
+
+    case "${ORIG_LOCALE_HINT}" in
+        zh*|ZH*|*zh_*|*zh-*) UI_LANG="zh" ;;
+        *) UI_LANG="en" ;;
+    esac
+    # Chinese text needs a UTF-8 terminal; otherwise stay with English/ASCII.
+    if [[ "${UI_UTF8}" != "1" ]]; then
+        UI_LANG="en"
+    fi
 }
 
-info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-success() { echo -e "${GREEN}[✓]${NC} $1"; }
-warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-error() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
-return_error() { echo -e "${RED}[✗]${NC} $1" >&2; return 1; }
+# L "中文" "English" -> prints the string for the current UI language.
+L() {
+    if [[ "${UI_LANG}" == "zh" ]]; then
+        printf '%s' "$1"
+    else
+        printf '%s' "$2"
+    fi
+}
+
+UI_TTY=0
+if [[ -t 0 && -t 1 ]]; then
+    UI_TTY=1
+fi
+
+setup_style() {
+    if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
+        C_RESET=$'\033[0m'
+        C_BOLD=$'\033[1m'
+        C_DIM=$'\033[38;5;245m'
+        C_ACC=$'\033[38;5;80m'
+        C_OK=$'\033[38;5;78m'
+        C_WARN=$'\033[38;5;221m'
+        C_ERR=$'\033[38;5;203m'
+       
+
+    else
+        C_RESET="" C_BOLD="" C_DIM="" C_ACC="" C_OK="" C_WARN="" C_ERR=""
+    fi
+
+    if [[ "${UI_UTF8}" == "1" ]]; then
+        G_OK="✓" G_ERR="✗" G_WARN="!" G_INFO="•" G_PTR="❯" G_DOT="●" G_RING="○"
+        G_H="─" G_V="│" G_TL="╭" G_TR="╮" G_BL="╰" G_BR="╯" G_ML="├" G_MR="┤"
+        G_UP="↑" G_DN="↓"
+        SPARK=(▁ ▂ ▃ ▄ ▅ ▆ ▇ █)
+        SPIN=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+    else
+        G_OK="+" G_ERR="x" G_WARN="!" G_INFO="-" G_PTR=">" G_DOT="*" G_RING="o"
+        G_H="-" G_V="|" G_TL="+" G_TR="+" G_BL="+" G_BR="+" G_ML="+" G_MR="+"
+        G_UP="^" G_DN="v"
+        SPARK=(_ . - '=' + '#' '#' '#')
+        SPIN=('|' '/' '-' '\')
+    fi
+
+    if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
+        ESC_T=0.05
+    else
+        ESC_T=1
+    fi
+}
+
+setup_locale
+setup_style
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Output helpers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+info()  { printf '  %s%s%s %s\n' "${C_ACC}" "${G_INFO}" "${C_RESET}" "$*"; }
+ok()    { printf '  %s%s%s %s\n' "${C_OK}" "${G_OK}" "${C_RESET}" "$*"; }
+warn()  { printf '  %s%s%s %s\n' "${C_WARN}" "${G_WARN}" "${C_RESET}" "$*" >&2; }
+err()   { printf '  %s%s%s %s\n' "${C_ERR}" "${G_ERR}" "${C_RESET}" "$*" >&2; }
+die()   { ui_cursor_show; err "$*"; exit 1; }
+dim()   { printf '%s%s%s\n' "${C_DIM}" "$*" "${C_RESET}"; }
 
 record_nonfatal_issue() {
     local message="${1:-}"
@@ -139,7 +228,239 @@ record_nonfatal_issue() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Input Normalization
+# TUI primitives
+# ═══════════════════════════════════════════════════════════════════════════════
+
+UI_W=72
+ui_measure() {
+    local cols
+    cols=$(tput cols 2>/dev/null || echo 80)
+    [[ "${cols}" =~ ^[0-9]+$ ]] || cols=80
+    UI_W=$((cols > 76 ? 76 : cols))
+    ((UI_W < 56)) && UI_W=56
+    return 0
+}
+
+ui_cursor_show() { [[ "${UI_TTY}" == "1" ]] && printf '\033[?25h'; return 0; }
+ui_cursor_hide() { [[ "${UI_TTY}" == "1" ]] && printf '\033[?25l'; return 0; }
+ui_clear() { [[ "${UI_TTY}" == "1" ]] && printf '\033[H\033[2J\033[3J'; return 0; }
+
+strip_ansi() {
+    local s="${1-}"
+    printf '%s' "${s//$'\033'\[+([0-9;?])[a-zA-Z]/}"
+}
+
+# Display width: CJK full-width characters count as 2 columns.
+dispw() {
+    local s i c cp w=0
+    s=$(strip_ansi "${1-}")
+    if ( LC_ALL=C; [[ "${s}" != *[^\ -~]* ]] ); then
+        printf '%s' "${#s}"
+        return 0
+    fi
+    for ((i = 0; i < ${#s}; i++)); do
+        c="${s:i:1}"
+        printf -v cp '%d' "'${c}"
+        if ((cp >= 0x1100 && (cp <= 0x115f || (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe6f) || (cp >= 0xff00 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6)))); then
+            w=$((w + 2))
+        else
+            w=$((w + 1))
+        fi
+    done
+    printf '%s' "${w}"
+}
+
+rep() { # rep <char> <count>
+    local s
+    ((${2} > 0)) || return 0
+    printf -v s '%*s' "${2}" ''
+    printf '%s' "${s// /${1}}"
+}
+
+pad_right() { # pad_right <text> <width>
+    local w pad
+    w=$(dispw "$1")
+    pad=$((${2} - w))
+    printf '%s' "$1"
+    ((pad > 0)) && printf '%*s' "${pad}" ''
+    return 0
+}
+
+box_top() { # box_top <title>
+    local title="${1:-}" w
+    ui_measure
+    if [[ -n "${title}" ]]; then
+        w=$(dispw "${title}")
+        printf '%s%s%s%s %s%s%s %s%s%s\n' "${C_DIM}" "${G_TL}" "${G_H}" "${C_RESET}" "${C_BOLD}${C_ACC}" "${title}" "${C_RESET}" \
+            "${C_DIM}" "$(rep "${G_H}" $((UI_W - 5 - w)))${G_TR}" "${C_RESET}"
+    else
+        printf '%s%s%s%s%s\n' "${C_DIM}" "${G_TL}" "$(rep "${G_H}" $((UI_W - 2)))" "${G_TR}" "${C_RESET}"
+    fi
+}
+box_row() {
+    local text="${1-}" w pad
+    w=$(dispw "${text}")
+    pad=$((UI_W - 4 - w))
+    ((pad < 0)) && pad=0
+    printf '%s%s%s %s%*s %s%s%s\n' "${C_DIM}" "${G_V}" "${C_RESET}" "${text}" "${pad}" '' "${C_DIM}" "${G_V}" "${C_RESET}"
+}
+box_sep() { printf '%s%s%s%s%s\n' "${C_DIM}" "${G_ML}" "$(rep "${G_H}" $((UI_W - 2)))" "${G_MR}" "${C_RESET}"; }
+box_bottom() { printf '%s%s%s%s%s\n' "${C_DIM}" "${G_BL}" "$(rep "${G_H}" $((UI_W - 2)))" "${G_BR}" "${C_RESET}"; }
+
+ui_logo() {
+    ui_measure
+    printf '%s' "${C_ACC}"
+    cat << 'EOF'
+  ███████╗██╗   ██╗██████╗  ██████╗ ██╗  ██╗██╗   ██╗
+  ██╔════╝██║   ██║██╔══██╗██╔═══██╗██║ ██╔╝██║   ██║
+  ███████╗██║   ██║██║  ██║██║   ██║█████╔╝ ██║   ██║
+  ╚════██║██║   ██║██║  ██║██║   ██║██╔═██╗ ██║   ██║
+  ███████║╚██████╔╝██████╔╝╚██████╔╝██║  ██╗╚██████╔╝
+  ╚══════╝ ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝
+EOF
+    printf '%s\n' "${C_RESET}"
+}
+
+ui_title() { # ui_title <text> : section heading
+    printf '\n  %s%s%s\n  %s%s%s\n' "${C_BOLD}${C_ACC}" "$1" "${C_RESET}" "${C_DIM}" "$(rep "${G_H}" $(($(dispw "$1"))))" "${C_RESET}"
+}
+
+# ui_menu <item>... : arrow keys / j k / digits / Enter. Sets MENU_SEL (0-based, -1 = back).
+MENU_SEL=-1
+MENU_DEFAULT=0
+ui_menu() {
+    local n=$# sel="${MENU_DEFAULT:-0}" i key k2 idx
+    local -a items=("$@")
+    ((sel >= n)) && sel=0
+    ui_cursor_hide
+    while :; do
+        for ((i = 0; i < n; i++)); do
+            if ((i == sel)); then
+                printf '\033[K  %s%s %s%s\n' "${C_ACC}${C_BOLD}" "${G_PTR}" "${items[i]}" "${C_RESET}"
+            else
+                printf '\033[K    %s\n' "${items[i]}"
+            fi
+        done
+        IFS= read -rsn1 key || { MENU_SEL=-1; break; }
+        case "${key}" in
+            $'\033')
+                k2=""
+                IFS= read -rsn2 -t "${ESC_T}" k2 || true
+                case "${k2}" in
+                    '[A') sel=$(((sel + n - 1) % n)) ;;
+                    '[B') sel=$(((sel + 1) % n)) ;;
+                    '') MENU_SEL=-1; break ;;
+                esac
+                ;;
+            k|K) sel=$(((sel + n - 1) % n)) ;;
+            j|J) sel=$(((sel + 1) % n)) ;;
+            '') MENU_SEL="${sel}"; break ;;
+            [1-9])
+                idx=$((key - 1))
+                if ((idx < n)); then
+                    MENU_SEL="${idx}"
+                    break
+                fi
+                ;;
+            q|Q) MENU_SEL=-1; break ;;
+        esac
+        printf '\033[%dA' "${n}"
+    done
+    ui_cursor_show
+    MENU_DEFAULT=0
+}
+
+# ui_ask <prompt> <default> [validator] -> ASK_RESULT
+ASK_RESULT=""
+ui_ask() {
+    local prompt="$1" def="${2-}" validator="${3:-}" ans hint=""
+    [[ -n "${def}" ]] && hint=" ${C_DIM}[${def}]${C_RESET}"
+    while :; do
+        if [[ "${UI_TTY}" == "1" ]]; then
+            IFS= read -e -r -p "  ${C_ACC}?${C_RESET} ${prompt}${hint} " ans || ans=""
+        else
+            ans=""
+        fi
+        ans=$(trim_space "${ans}")
+        [[ -z "${ans}" ]] && ans="${def}"
+        if [[ -z "${validator}" ]] || "${validator}" "${ans}"; then
+            ASK_RESULT="${ans}"
+            return 0
+        fi
+        err "$(L '输入无效，请重试。' 'Invalid input, please try again.')"
+    done
+}
+
+# ui_confirm <prompt> <y|n default> -> 0 yes / 1 no
+ui_confirm() {
+    local prompt="$1" def="${2:-y}" ans hint
+    if [[ "${def}" == "y" ]]; then hint="Y/n"; else hint="y/N"; fi
+    if [[ "${UI_TTY}" != "1" || "${ASSUME_YES}" == "1" ]]; then
+        [[ "${def}" == "y" ]]
+        return $?
+    fi
+    while :; do
+        IFS= read -r -p "  ${C_ACC}?${C_RESET} ${prompt} ${C_DIM}[${hint}]${C_RESET} " ans || ans=""
+        ans=$(trim_space "${ans}")
+        ans="${ans,,}"
+        case "${ans}" in
+            "") [[ "${def}" == "y" ]]; return $? ;;
+            y|yes|是|好) return 0 ;;
+            n|no|否|不) return 1 ;;
+        esac
+    done
+}
+
+ui_pause() {
+    [[ "${UI_TTY}" == "1" ]] || return 0
+    printf '\n  %s%s%s' "${C_DIM}" "$(L '按任意键继续…' 'Press any key to continue…')" "${C_RESET}"
+    IFS= read -rsn1 _ || true
+    printf '\n'
+}
+
+# ui_run <message> <command...> : run with a spinner, show output tail on failure.
+UI_RUN_LOG=""
+ui_run() {
+    local msg="$1" pid rc i=0
+    shift
+    UI_RUN_LOG=$(mktemp)
+    if [[ "${UI_TTY}" != "1" ]]; then
+        info "${msg}"
+        "$@" >"${UI_RUN_LOG}" 2>&1
+        rc=$?
+    else
+        "$@" >"${UI_RUN_LOG}" 2>&1 &
+        pid=$!
+        ui_cursor_hide
+        while kill -0 "${pid}" 2>/dev/null; do
+            printf '\r\033[K  %s%s%s %s' "${C_ACC}" "${SPIN[i % ${#SPIN[@]}]}" "${C_RESET}" "${msg}"
+            i=$((i + 1))
+            sleep 0.1
+        done
+        wait "${pid}"
+        rc=$?
+        ui_cursor_show
+        printf '\r\033[K'
+    fi
+    if ((rc == 0)); then
+        ok "${msg}"
+    else
+        err "${msg}"
+        if [[ -s "${UI_RUN_LOG}" ]]; then
+            tail -n 12 "${UI_RUN_LOG}" | sed "s/^/      ${C_DIM}/; s/\$/${C_RESET}/" >&2
+        fi
+    fi
+    return "${rc}"
+}
+
+ASSUME_YES="${SUDOKU_YES:-}"
+if [[ -z "${ASSUME_YES}" ]]; then
+    if [[ "${UI_TTY}" == "1" ]]; then ASSUME_YES=0; else ASSUME_YES=1; fi
+fi
+case "${ASSUME_YES}" in 1|true|yes|y|on) ASSUME_YES=1 ;; *) ASSUME_YES=0 ;; esac
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Small utilities
 # ═══════════════════════════════════════════════════════════════════════════════
 
 normalize_bool() {
@@ -155,10 +476,15 @@ normalize_bool() {
 is_valid_port() {
     local p="${1:-}"
     [[ "${p}" =~ ^[0-9]+$ ]] || return 1
-    if ((p < 1 || p > 65535)); then
-        return 1
-    fi
+    ((p >= 1 && p <= 65535))
 }
+
+is_nonneg_number() { [[ "${1:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; }
+is_optional_number() { [[ -z "${1:-}" ]] || is_nonneg_number "$1"; }
+is_hex_key() { [[ "${1:-}" =~ ^[0-9a-fA-F]+$ ]] && { ((${#1} == 64 || ${#1} == 128)) || ((${#1} >= 8 && ${#1} <= 16)); }; }
+is_optional_hex_key() { [[ -z "${1:-}" ]] || is_hex_key "$1"; }
+is_alias() { [[ -n "${1:-}" && "${1}" != *[\"\\]* && ${#1} -le 32 ]] && [[ "${1}" != *[[:cntrl:]]* ]]; }
+is_port_or_empty() { [[ -z "${1:-}" ]] || is_valid_port "$1"; }
 
 trim_space() {
     local s="${1:-}"
@@ -170,18 +496,15 @@ trim_space() {
 random_uint32() {
     local value=""
     value=$(od -An -N4 -tu4 /dev/urandom 2>/dev/null | tr -d ' ')
-    if [[ -z "${value}" ]]; then
-        value=$RANDOM
-    fi
+    [[ -n "${value}" ]] || value=$RANDOM
     printf '%s' "${value}"
 }
 
 generate_random_path_root() {
     local alphabet="abcdefghijklmnopqrstuvwxyz"
     local length=$((6 + ($(random_uint32) % 5)))
-    local output=""
-    local i idx
-    for ((i=0; i<length; i++)); do
+    local output="" i idx
+    for ((i = 0; i < length; i++)); do
         idx=$(($(random_uint32) % ${#alphabet}))
         output+="${alphabet:${idx}:1}"
     done
@@ -190,10 +513,7 @@ generate_random_path_root() {
 
 is_tcp_port_in_use() {
     local port="${1:-}"
-    if ! is_valid_port "${port}"; then
-        return 1
-    fi
-
+    is_valid_port "${port}" || return 1
     if command -v ss >/dev/null 2>&1; then
         ss -Hltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:|\\])${port}$"
         return $?
@@ -211,156 +531,19 @@ is_tcp_port_in_use() {
 
 pick_random_high_port() {
     local port=""
-    local attempt
-    for attempt in $(seq 1 128); do
+    for _ in $(seq 1 128); do
         port=$((50001 + ($(random_uint32) % 15535)))
         if ! is_tcp_port_in_use "${port}"; then
             printf '%s' "${port}"
             return 0
         fi
     done
-    error "Failed to find an available random port in 50001-65535"
-}
-
-normalize_settings() {
-    local http_mask_enabled
-    local http_mask_tls
-    local cf_fallback_enabled
-    local cf_fallback_force
-    local warp_enabled
-
-    if ! http_mask_enabled=$(normalize_bool "${SUDOKU_HTTP_MASK}"); then
-        error "Invalid SUDOKU_HTTP_MASK=${SUDOKU_HTTP_MASK} (expected true/false)"
-    fi
-    if ! http_mask_tls=$(normalize_bool "${SUDOKU_HTTP_MASK_TLS}"); then
-        error "Invalid SUDOKU_HTTP_MASK_TLS=${SUDOKU_HTTP_MASK_TLS} (expected true/false)"
-    fi
-    if ! cf_fallback_enabled=$(normalize_bool "${SUDOKU_CF_FALLBACK}"); then
-        error "Invalid SUDOKU_CF_FALLBACK=${SUDOKU_CF_FALLBACK} (expected true/false)"
-    fi
-    if ! cf_fallback_force=$(normalize_bool "${SUDOKU_CF_FALLBACK_FORCE}"); then
-        error "Invalid SUDOKU_CF_FALLBACK_FORCE=${SUDOKU_CF_FALLBACK_FORCE} (expected true/false)"
-    fi
-    if ! warp_enabled=$(normalize_bool "${SUDOKU_WARP}"); then
-        error "Invalid SUDOKU_WARP=${SUDOKU_WARP} (expected true/false)"
-    fi
-
-    SUDOKU_PORT=$(trim_space "${SUDOKU_PORT}")
-    if [[ -z "${SUDOKU_PORT}" ]]; then
-        SUDOKU_PORT=$(pick_random_high_port)
-        info "Selected random server port: ${SUDOKU_PORT}"
-    fi
-    if ! is_valid_port "${SUDOKU_PORT}"; then
-        error "Invalid SUDOKU_PORT=${SUDOKU_PORT} (expected 1-65535)"
-    fi
-    if ! is_valid_port "${SUDOKU_CLIENT_PORT}"; then
-        error "Invalid SUDOKU_CLIENT_PORT=${SUDOKU_CLIENT_PORT} (expected 1-65535)"
-    fi
-
-    SUDOKU_FALLBACK=$(trim_space "${SUDOKU_FALLBACK}")
-    if [[ -z "${SUDOKU_FALLBACK}" ]]; then
-        error "Invalid SUDOKU_FALLBACK (expected host:port)"
-    fi
-    local fallback_host fallback_port
-    fallback_port="${SUDOKU_FALLBACK##*:}"
-    fallback_host="${SUDOKU_FALLBACK%:*}"
-    if [[ -z "${fallback_host}" || -z "${fallback_port}" ]]; then
-        error "Invalid SUDOKU_FALLBACK=${SUDOKU_FALLBACK} (expected host:port)"
-    fi
-    if ! is_valid_port "${fallback_port}"; then
-        error "Invalid SUDOKU_FALLBACK=${SUDOKU_FALLBACK} (invalid port; expected 1-65535)"
-    fi
-    if [[ "${fallback_host}" == *:* && "${fallback_host}" != \[*\] ]]; then
-        error "Invalid SUDOKU_FALLBACK=${SUDOKU_FALLBACK} (IPv6 must be in [::1]:port form)"
-    fi
-
-    HTTP_MASK_MODE=$(trim_space "${SUDOKU_HTTP_MASK_MODE}")
-    HTTP_MASK_MODE=$(echo "${HTTP_MASK_MODE}" | tr '[:upper:]' '[:lower:]')
-    if [[ -z "${HTTP_MASK_MODE}" ]]; then
-        HTTP_MASK_MODE="auto"
-    fi
-    case "${HTTP_MASK_MODE}" in
-        auto|stream|poll|legacy|ws) ;;
-        *) error "Invalid SUDOKU_HTTP_MASK_MODE=${SUDOKU_HTTP_MASK_MODE} (expected auto/stream/poll/legacy/ws)" ;;
-    esac
-
-    HTTP_MASK_HOST=$(trim_space "${SUDOKU_HTTP_MASK_HOST}")
-    HTTP_MASK_TLS="${http_mask_tls}"
-
-    HTTP_MASK_PATH_ROOT=$(trim_space "${SUDOKU_HTTP_MASK_PATH_ROOT}")
-    while [[ "${HTTP_MASK_PATH_ROOT}" == /* ]]; do
-        HTTP_MASK_PATH_ROOT="${HTTP_MASK_PATH_ROOT#/}"
-    done
-    while [[ "${HTTP_MASK_PATH_ROOT}" == */ ]]; do
-        HTTP_MASK_PATH_ROOT="${HTTP_MASK_PATH_ROOT%/}"
-    done
-    if [[ -n "${HTTP_MASK_PATH_ROOT}" && ! "${HTTP_MASK_PATH_ROOT}" =~ ^[A-Za-z0-9_-]+$ ]]; then
-        error "Invalid SUDOKU_HTTP_MASK_PATH_ROOT=${SUDOKU_HTTP_MASK_PATH_ROOT} (expected single segment [A-Za-z0-9_-], e.g. aabbcc)"
-    fi
-    if [[ "${http_mask_enabled}" == "true" && -z "${HTTP_MASK_PATH_ROOT}" ]]; then
-        HTTP_MASK_PATH_ROOT=$(generate_random_path_root)
-        info "Generated random HTTP mask path root: ${HTTP_MASK_PATH_ROOT}"
-    fi
-
-    HTTP_MASK_MULTIPLEX=$(trim_space "${SUDOKU_HTTP_MASK_MULTIPLEX}")
-    HTTP_MASK_MULTIPLEX=$(echo "${HTTP_MASK_MULTIPLEX}" | tr '[:upper:]' '[:lower:]')
-    if [[ -z "${HTTP_MASK_MULTIPLEX}" ]]; then
-        HTTP_MASK_MULTIPLEX="on"
-    fi
-    case "${HTTP_MASK_MULTIPLEX}" in
-        off|auto|on) ;;
-        *) error "Invalid SUDOKU_HTTP_MASK_MULTIPLEX=${SUDOKU_HTTP_MASK_MULTIPLEX} (expected off/auto/on)" ;;
-    esac
-
-    if [[ "${http_mask_enabled}" == "true" ]]; then
-        DISABLE_HTTP_MASK="false"
-    else
-        DISABLE_HTTP_MASK="true"
-    fi
-
-    CF_FALLBACK_ENABLED="${cf_fallback_enabled}"
-    CF_FALLBACK_FORCE="${cf_fallback_force}"
-    WARP_ENABLED="${warp_enabled}"
-    CF_FALLBACK_BIND=$(trim_space "${SUDOKU_CF_FALLBACK_BIND}")
-    if [[ -z "${CF_FALLBACK_BIND}" ]]; then
-        CF_FALLBACK_BIND="127.0.0.1"
-    fi
-    CF_FALLBACK_PORT=$(trim_space "${SUDOKU_CF_FALLBACK_PORT}")
-    CF_FALLBACK_PORT_FALLBACK=$(trim_space "${SUDOKU_CF_FALLBACK_FALLBACK_PORT}")
-    if ! is_valid_port "${CF_FALLBACK_PORT}"; then
-        error "Invalid SUDOKU_CF_FALLBACK_PORT=${SUDOKU_CF_FALLBACK_PORT} (expected 1-65535)"
-    fi
-    if ! is_valid_port "${CF_FALLBACK_PORT_FALLBACK}"; then
-        error "Invalid SUDOKU_CF_FALLBACK_FALLBACK_PORT=${SUDOKU_CF_FALLBACK_FALLBACK_PORT} (expected 1-65535)"
-    fi
-
-    SUBSCRIPTION_OUTPUT_FILE=$(trim_space "${SUDOKU_SUBSCRIPTION_PATH}")
-    if [[ -z "${SUBSCRIPTION_OUTPUT_FILE}" ]]; then
-        SUBSCRIPTION_OUTPUT_FILE="${CONFIG_DIR}/subscription.yaml"
-    elif [[ "${SUBSCRIPTION_OUTPUT_FILE}" != /* ]]; then
-        SUBSCRIPTION_OUTPUT_FILE="${CONFIG_DIR}/${SUBSCRIPTION_OUTPUT_FILE}"
-    fi
-    case "${SUBSCRIPTION_OUTPUT_FILE}" in
-        *$'\n'*|*$'\r'*) error "Invalid SUDOKU_SUBSCRIPTION_PATH: path must be a single line" ;;
-    esac
-    case "${SUBSCRIPTION_OUTPUT_FILE}" in
-        *.yaml|*.yml) ;;
-        *) error "Invalid SUDOKU_SUBSCRIPTION_PATH=${SUDOKU_SUBSCRIPTION_PATH} (expected a .yaml or .yml file)" ;;
-    esac
-
-    SUBSCRIPTION_NODE_NAME=$(trim_space "${SUDOKU_SUBSCRIPTION_NODE_NAME}")
-    if [[ -z "${SUBSCRIPTION_NODE_NAME}" ]]; then
-        SUBSCRIPTION_NODE_NAME="sudoku"
-    fi
-    SUBSCRIPTION_TEMPLATE_URL=$(trim_space "${SUDOKU_SUBSCRIPTION_TEMPLATE_URL}")
+    die "Failed to find an available random port in 50001-65535"
 }
 
 join_host_port() {
-    local host="${1:-}"
-    local port="${2:-}"
-    if [[ -z "${host}" || -z "${port}" ]]; then
-        return 1
-    fi
+    local host="${1:-}" port="${2:-}"
+    [[ -n "${host}" && -n "${port}" ]] || return 1
     if [[ "${host}" == *:* && "${host}" != \[*\] ]]; then
         printf '[%s]:%s' "${host}" "${port}"
     else
@@ -368,10 +551,24 @@ join_host_port() {
     fi
 }
 
-build_http_url() {
-    local host="${1:-}"
-    local port="${2:-}"
-    printf 'http://%s/' "$(join_host_port "${host}" "${port}")"
+build_http_url() { printf 'http://%s/' "$(join_host_port "${1:-}" "${2:-}")"; }
+
+extract_port_from_hostport() {
+    local hp="${1:-}"
+    [[ -n "${hp}" ]] || return 1
+    if [[ "${hp}" == \[*\]:* ]]; then printf '%s' "${hp##*]:}"; return 0; fi
+    printf '%s' "${hp##*:}"
+}
+
+extract_host_from_hostport() {
+    local hp="${1:-}"
+    [[ -n "${hp}" ]] || return 1
+    if [[ "${hp}" == \[*\]:* ]]; then
+        hp="${hp#[}"
+        printf '%s' "${hp%%]:*}"
+        return 0
+    fi
+    printf '%s' "${hp%:*}"
 }
 
 yaml_escape_double_quoted() {
@@ -382,146 +579,675 @@ yaml_escape_double_quoted() {
     printf '%s' "${value}"
 }
 
+# fmt_bytes <bytes> -> "1.23 MB"
+fmt_bytes() {
+    local b="${1:-0}" unit=0 whole frac
+    local -a units=(B KB MB GB TB PB)
+    local scaled=$((b * 100))
+    while ((scaled >= 102400 && unit < 5)); do
+        scaled=$((scaled / 1024))
+        unit=$((unit + 1))
+    done
+    if ((unit == 0)); then
+        printf '%d B' "${b}"
+        return 0
+    fi
+    whole=$((scaled / 100))
+    frac=$((scaled % 100))
+    printf '%d.%02d %s' "${whole}" "${frac}" "${units[unit]}"
+}
+
+# fmt_rate <bytes/sec> -> "1.23 MB/s"
+fmt_rate() { printf '%s/s' "$(fmt_bytes "${1:-0}")"; }
+
+# fmt_mbps <bytes/sec> -> "9.8 Mbps"
+fmt_mbps() {
+    local bits=$((${1:-0} * 8 * 10 / 1000000))
+    printf '%d.%d Mbps' $((bits / 10)) $((bits % 10))
+}
+
+fmt_duration() { # seconds -> 3d 4h 5m
+    local s="${1:-0}" d h m
+    d=$((s / 86400)); h=$(((s % 86400) / 3600)); m=$(((s % 3600) / 60))
+    if ((d > 0)); then printf '%dd %dh %dm' "${d}" "${h}" "${m}"
+    elif ((h > 0)); then printf '%dh %dm' "${h}" "${m}"
+    elif ((m > 0)); then printf '%dm %ds' "${m}" $((s % 60))
+    else printf '%ds' "${s}"; fi
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# System Detection
+# Compatibility shims for helper functions reused from the previous installer
 # ═══════════════════════════════════════════════════════════════════════════════
 
-detect_os() {
-    if [[ "$(uname)" != "Linux" ]]; then
-        error "This script only supports Linux servers."
+success() { ok "$@"; }
+return_error() { err "$*"; return 1; }
+error() { die "$@"; }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Settings (environment variables -> validated globals), install-time only
+# ═══════════════════════════════════════════════════════════════════════════════
+
+normalize_settings() {
+    local http_mask_enabled http_mask_tls cf_fallback_enabled cf_fallback_force warp_enabled
+
+    http_mask_enabled=$(normalize_bool "${SUDOKU_HTTP_MASK}") || die "Invalid SUDOKU_HTTP_MASK=${SUDOKU_HTTP_MASK} (expected true/false)"
+    http_mask_tls=$(normalize_bool "${SUDOKU_HTTP_MASK_TLS}") || die "Invalid SUDOKU_HTTP_MASK_TLS=${SUDOKU_HTTP_MASK_TLS} (expected true/false)"
+    cf_fallback_enabled=$(normalize_bool "${SUDOKU_CF_FALLBACK}") || die "Invalid SUDOKU_CF_FALLBACK=${SUDOKU_CF_FALLBACK} (expected true/false)"
+    cf_fallback_force=$(normalize_bool "${SUDOKU_CF_FALLBACK_FORCE}") || die "Invalid SUDOKU_CF_FALLBACK_FORCE=${SUDOKU_CF_FALLBACK_FORCE} (expected true/false)"
+    warp_enabled=$(normalize_bool "${SUDOKU_WARP}") || die "Invalid SUDOKU_WARP=${SUDOKU_WARP} (expected true/false)"
+
+    SUDOKU_PORT=$(trim_space "${SUDOKU_PORT}")
+    if [[ -n "${SUDOKU_PORT}" ]] && ! is_valid_port "${SUDOKU_PORT}"; then
+        die "Invalid SUDOKU_PORT=${SUDOKU_PORT} (expected 1-65535)"
     fi
-    success "Operating system: Linux"
+    is_valid_port "${SUDOKU_CLIENT_PORT}" || die "Invalid SUDOKU_CLIENT_PORT=${SUDOKU_CLIENT_PORT} (expected 1-65535)"
+
+    SUDOKU_FALLBACK=$(trim_space "${SUDOKU_FALLBACK}")
+    [[ -n "${SUDOKU_FALLBACK}" ]] || die "Invalid SUDOKU_FALLBACK (expected host:port)"
+    local fallback_host fallback_port
+    fallback_port="${SUDOKU_FALLBACK##*:}"
+    fallback_host="${SUDOKU_FALLBACK%:*}"
+    if [[ -z "${fallback_host}" || -z "${fallback_port}" ]] || ! is_valid_port "${fallback_port}"; then
+        die "Invalid SUDOKU_FALLBACK=${SUDOKU_FALLBACK} (expected host:port)"
+    fi
+    if [[ "${fallback_host}" == *:* && "${fallback_host}" != \[*\] ]]; then
+        die "Invalid SUDOKU_FALLBACK=${SUDOKU_FALLBACK} (IPv6 must be in [::1]:port form)"
+    fi
+
+    HTTP_MASK_MODE=$(trim_space "${SUDOKU_HTTP_MASK_MODE}")
+    HTTP_MASK_MODE="${HTTP_MASK_MODE,,}"
+    [[ -n "${HTTP_MASK_MODE}" ]] || HTTP_MASK_MODE="auto"
+    case "${HTTP_MASK_MODE}" in
+        auto|stream|poll|legacy|ws) ;;
+        *) die "Invalid SUDOKU_HTTP_MASK_MODE=${SUDOKU_HTTP_MASK_MODE} (expected auto/stream/poll/legacy/ws)" ;;
+    esac
+
+    HTTP_MASK_HOST=$(trim_space "${SUDOKU_HTTP_MASK_HOST}")
+    HTTP_MASK_TLS="${http_mask_tls}"
+
+    HTTP_MASK_PATH_ROOT=$(trim_space "${SUDOKU_HTTP_MASK_PATH_ROOT}")
+    while [[ "${HTTP_MASK_PATH_ROOT}" == /* ]]; do HTTP_MASK_PATH_ROOT="${HTTP_MASK_PATH_ROOT#/}"; done
+    while [[ "${HTTP_MASK_PATH_ROOT}" == */ ]]; do HTTP_MASK_PATH_ROOT="${HTTP_MASK_PATH_ROOT%/}"; done
+    if [[ -n "${HTTP_MASK_PATH_ROOT}" && ! "${HTTP_MASK_PATH_ROOT}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        die "Invalid SUDOKU_HTTP_MASK_PATH_ROOT=${SUDOKU_HTTP_MASK_PATH_ROOT} (expected single segment [A-Za-z0-9_-], e.g. aabbcc)"
+    fi
+    if [[ "${http_mask_enabled}" == "true" && -z "${HTTP_MASK_PATH_ROOT}" ]]; then
+        HTTP_MASK_PATH_ROOT=$(generate_random_path_root)
+    fi
+
+    HTTP_MASK_MULTIPLEX=$(trim_space "${SUDOKU_HTTP_MASK_MULTIPLEX}")
+    HTTP_MASK_MULTIPLEX="${HTTP_MASK_MULTIPLEX,,}"
+    [[ -n "${HTTP_MASK_MULTIPLEX}" ]] || HTTP_MASK_MULTIPLEX="on"
+    case "${HTTP_MASK_MULTIPLEX}" in
+        off|auto|on) ;;
+        *) die "Invalid SUDOKU_HTTP_MASK_MULTIPLEX=${SUDOKU_HTTP_MASK_MULTIPLEX} (expected off/auto/on)" ;;
+    esac
+
+    if [[ "${http_mask_enabled}" == "true" ]]; then DISABLE_HTTP_MASK="false"; else DISABLE_HTTP_MASK="true"; fi
+
+    CF_FALLBACK_ENABLED="${cf_fallback_enabled}"
+    CF_FALLBACK_FORCE="${cf_fallback_force}"
+    WARP_ENABLED="${warp_enabled}"
+    CF_FALLBACK_BIND=$(trim_space "${SUDOKU_CF_FALLBACK_BIND}")
+    [[ -n "${CF_FALLBACK_BIND}" ]] || CF_FALLBACK_BIND="127.0.0.1"
+    CF_FALLBACK_PORT=$(trim_space "${SUDOKU_CF_FALLBACK_PORT}")
+    CF_FALLBACK_PORT_FALLBACK=$(trim_space "${SUDOKU_CF_FALLBACK_FALLBACK_PORT}")
+    is_valid_port "${CF_FALLBACK_PORT}" || die "Invalid SUDOKU_CF_FALLBACK_PORT=${SUDOKU_CF_FALLBACK_PORT} (expected 1-65535)"
+    is_valid_port "${CF_FALLBACK_PORT_FALLBACK}" || die "Invalid SUDOKU_CF_FALLBACK_FALLBACK_PORT=${SUDOKU_CF_FALLBACK_FALLBACK_PORT} (expected 1-65535)"
+
+    SUBSCRIPTION_OUTPUT_FILE=$(trim_space "${SUDOKU_SUBSCRIPTION_PATH}")
+    if [[ -z "${SUBSCRIPTION_OUTPUT_FILE}" ]]; then
+        SUBSCRIPTION_OUTPUT_FILE="${CONFIG_DIR}/subscription.yaml"
+    elif [[ "${SUBSCRIPTION_OUTPUT_FILE}" != /* ]]; then
+        SUBSCRIPTION_OUTPUT_FILE="${CONFIG_DIR}/${SUBSCRIPTION_OUTPUT_FILE}"
+    fi
+    case "${SUBSCRIPTION_OUTPUT_FILE}" in
+        *$'\n'*|*$'\r'*) die "Invalid SUDOKU_SUBSCRIPTION_PATH: path must be a single line" ;;
+    esac
+    case "${SUBSCRIPTION_OUTPUT_FILE}" in
+        *.yaml|*.yml) ;;
+        *) die "Invalid SUDOKU_SUBSCRIPTION_PATH=${SUDOKU_SUBSCRIPTION_PATH} (expected a .yaml or .yml file)" ;;
+    esac
+
+    SUBSCRIPTION_NODE_NAME=$(trim_space "${SUDOKU_SUBSCRIPTION_NODE_NAME}")
+    [[ -n "${SUBSCRIPTION_NODE_NAME}" ]] || SUBSCRIPTION_NODE_NAME="sudoku"
+    SUBSCRIPTION_TEMPLATE_URL=$(trim_space "${SUDOKU_SUBSCRIPTION_TEMPLATE_URL}")
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# System detection & dependencies
+# ═══════════════════════════════════════════════════════════════════════════════
+
+dev_mode() { [[ "${SUDOKU_DEV:-}" == "1" ]]; }
+
+detect_os() {
+    if [[ "$(uname)" != "Linux" ]] && ! dev_mode; then
+        die "$(L '此脚本仅支持 Linux 服务器。' 'This script only supports Linux servers.')"
+    fi
 }
 
 detect_arch() {
     local arch
     arch=$(uname -m)
     case "$arch" in
-        x86_64|amd64)
-            ARCH="amd64"
-            ;;
-        aarch64|arm64)
-            ARCH="arm64"
-            ;;
-        *)
-            error "Unsupported architecture: $arch"
-            ;;
+        x86_64|amd64) ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        *) die "Unsupported architecture: $arch" ;;
     esac
-    success "Architecture: $ARCH"
 }
 
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        error "This script must be run as root (use sudo)"
+ensure_root() {
+    dev_mode && return 0
+    [[ $EUID -eq 0 ]] && return 0
+    if [[ -f "${0}" && -r "${0}" ]] && command -v sudo >/dev/null 2>&1; then
+        exec sudo -E bash "${0}" "$@"
     fi
-    success "Running as root"
+    die "$(L '请使用 root 权限运行（sudo bash -c "$(curl ...)"）。' 'Please run as root (use sudo).')"
 }
 
 detect_pkg_manager() {
-    if command -v apt-get &> /dev/null; then
-        PKG_MANAGER="apt"
-    elif command -v yum &> /dev/null; then
-        PKG_MANAGER="yum"
-    elif command -v dnf &> /dev/null; then
-        PKG_MANAGER="dnf"
-    elif command -v apk &> /dev/null; then
-        PKG_MANAGER="apk"
-    else
-        PKG_MANAGER=""
-        return 1
-    fi
+    if command -v apt-get &>/dev/null; then PKG_MANAGER="apt"
+    elif command -v dnf &>/dev/null; then PKG_MANAGER="dnf"
+    elif command -v yum &>/dev/null; then PKG_MANAGER="yum"
+    elif command -v apk &>/dev/null; then PKG_MANAGER="apk"
+    else PKG_MANAGER=""; return 1; fi
 }
 
 install_packages() {
     local pkgs=("$@")
-    if [[ ${#pkgs[@]} -eq 0 ]]; then
-        return 0
-    fi
-
-    if [[ -z "${PKG_MANAGER}" ]]; then
-        detect_pkg_manager || error "Cannot install dependencies. Please install manually: ${pkgs[*]}"
-    fi
-
+    ((${#pkgs[@]} > 0)) || return 0
+    [[ -n "${PKG_MANAGER}" ]] || detect_pkg_manager || { echo "Cannot install dependencies. Please install manually: ${pkgs[*]}" >&2; return 1; }
     case "${PKG_MANAGER}" in
-        apt)
-            apt-get update -qq
-            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${pkgs[@]}"
-            ;;
-        yum)
-            yum install -y -q "${pkgs[@]}"
-            ;;
-        dnf)
-            dnf install -y -q "${pkgs[@]}"
-            ;;
-        apk)
-            apk add --quiet "${pkgs[@]}"
-            ;;
-        *)
-            error "Cannot install dependencies. Please install manually: ${pkgs[*]}"
-            ;;
+        apt) apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${pkgs[@]}" ;;
+        yum) yum install -y -q "${pkgs[@]}" ;;
+        dnf) dnf install -y -q "${pkgs[@]}" ;;
+        apk) apk add --quiet "${pkgs[@]}" ;;
+        *) echo "Cannot install dependencies. Please install manually: ${pkgs[*]}" >&2; return 1 ;;
     esac
 }
 
-check_dependencies() {
-    local missing=()
-    
+install_missing_deps() {
+    local missing=() cmd
     for cmd in curl jq python3 openssl; do
-        if ! command -v "$cmd" &> /dev/null; then
-            missing+=("$cmd")
-        fi
+        command -v "${cmd}" &>/dev/null || missing+=("${cmd}")
     done
-    
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        info "Installing missing dependencies: ${missing[*]}"
-        install_packages "${missing[@]}"
+    if ! command -v ss &>/dev/null; then
+        detect_pkg_manager >/dev/null 2>&1 || true
+        case "${PKG_MANAGER}" in
+            apt|apk) missing+=(iproute2) ;;
+            yum|dnf) missing+=(iproute) ;;
+        esac
     fi
+    ((${#missing[@]} == 0)) && return 0
+    install_packages "${missing[@]}"
+}
 
-    success "Dependencies satisfied"
+check_dependencies() {
+    local missing=() cmd
+    for cmd in curl jq python3 openssl; do
+        command -v "${cmd}" &>/dev/null || missing+=("${cmd}")
+    done
+    if ((${#missing[@]} > 0)) || ! command -v ss &>/dev/null; then
+        ui_run "$(L "安装依赖: ${missing[*]:-iproute2}" "Installing dependencies: ${missing[*]:-iproute2}")" install_missing_deps \
+            || die "$(L '依赖安装失败，请手动安装 curl jq python3 openssl。' 'Dependency installation failed; install curl jq python3 openssl manually.')"
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Cloudflare 500 Error Page Fallback (for suspicious traffic fallback)
+# Versions file, GitHub releases, binary installation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ver_get() {
+    [[ -f "${VERSIONS_FILE}" ]] || return 0
+    sed -n "s/^${1}=//p" "${VERSIONS_FILE}" | tail -n 1
+}
+
+ver_set() {
+    local key="$1" value="$2" tmp
+    mkdir -p "${CONFIG_DIR}"
+    tmp=$(mktemp)
+    [[ -f "${VERSIONS_FILE}" ]] && grep -v "^${key}=" "${VERSIONS_FILE}" >"${tmp}" || true
+    printf '%s=%s\n' "${key}" "${value}" >>"${tmp}"
+    mv "${tmp}" "${VERSIONS_FILE}"
+    chmod 600 "${VERSIONS_FILE}"
+}
+
+gh_api() {
+    curl -fsSL --connect-timeout 8 --max-time 25 -H 'Accept: application/vnd.github+json' \
+        ${GITHUB_TOKEN:+-H "Authorization: Bearer ${GITHUB_TOKEN}"} "https://api.github.com/$1"
+}
+
+get_latest_tag() { # <repo>
+    local repo="$1" tag="" url=""
+    tag=$(gh_api "repos/${repo}/releases/latest" 2>/dev/null | jq -r '.tag_name // empty' 2>/dev/null || true)
+    if [[ -z "${tag}" ]]; then
+        url=$(curl -fsSL --connect-timeout 8 -o /dev/null -w '%{url_effective}' "https://github.com/${repo}/releases/latest" 2>/dev/null || true)
+        tag="${url##*/}"
+        [[ "${tag}" == "latest" ]] && tag=""
+    fi
+    [[ -n "${tag}" && "${tag}" != "null" ]] || return 1
+    printf '%s' "${tag}"
+}
+
+list_release_tags() { # <repo> [count] -> "tag|prerelease|date"
+    gh_api "repos/${1}/releases?per_page=${2:-12}" | jq -r '.[] | "\(.tag_name)|\(.prerelease)|\(.published_at[0:10])"'
+}
+
+latest_github_asset_url() { # <repo> <regex> [tag]
+    local repo="${1:-}" pattern="${2:-}" tag="${3:-}" path
+    [[ -n "${repo}" && -n "${pattern}" ]] || return 1
+    if [[ -n "${tag}" ]]; then path="releases/tags/${tag}"; else path="releases/latest"; fi
+    local url
+    url=$(gh_api "repos/${repo}/${path}" | jq -r --arg pattern "${pattern}" '.assets[] | select(.name | test($pattern)) | .browser_download_url' | head -n 1)
+    [[ -n "${url}" && "${url}" != "null" ]] || return 1
+    printf '%s' "${url}"
+}
+
+backup_binary() { # <name> <version-key>
+    local name="$1" ver
+    [[ -x "${INSTALL_DIR}/${name}" ]] || return 0
+    ver=$(ver_get "$2")
+    ver="${ver:-unknown}"
+    mkdir -p "${BACKUP_DIR}"
+    cp -p "${INSTALL_DIR}/${name}" "${BACKUP_DIR}/${name}@${ver}@$(date +%Y%m%d%H%M%S)"
+    # Keep the three most recent backups per binary.
+    local old
+    while IFS= read -r old; do
+        [[ -n "${old}" ]] && rm -f "${old}"
+    done < <(ls -1t "${BACKUP_DIR}/${name}@"* 2>/dev/null | tail -n +4)
+}
+
+# Download, smoke-test and atomically install an archive containing <binary_name>.
+# install_from_archive <url> <binary_name> <dest_name> <version-key> <tag>
+install_from_archive() {
+    local url="$1" bin_name="$2" dest="$3" vkey="$4" tag="$5" tmp bin rc
+    tmp=$(mktemp -d)
+    if ! curl -fsSL --connect-timeout 10 "${url}" -o "${tmp}/pkg.tgz"; then
+        echo "download failed: ${url}" >&2
+        rm -rf "${tmp}"
+        return 1
+    fi
+    if ! tar -xzf "${tmp}/pkg.tgz" -C "${tmp}"; then
+        echo "archive is corrupt: ${url}" >&2
+        rm -rf "${tmp}"
+        return 1
+    fi
+    bin=$(find "${tmp}" -type f -name "${bin_name}" | head -n 1)
+    if [[ -z "${bin}" ]]; then
+        echo "archive does not contain a '${bin_name}' binary" >&2
+        rm -rf "${tmp}"
+        return 1
+    fi
+    chmod 755 "${bin}"
+    "${bin}" -h >/dev/null 2>&1 </dev/null
+    rc=$?
+    if ((rc == 126 || rc == 127)) && ! dev_mode; then
+        echo "downloaded binary cannot run on this system (exit ${rc})" >&2
+        rm -rf "${tmp}"
+        return 1
+    fi
+    mkdir -p "${INSTALL_DIR}"
+    backup_binary "${dest}" "${vkey}"
+    cp "${bin}" "${INSTALL_DIR}/${dest}.new"
+    chmod 755 "${INSTALL_DIR}/${dest}.new"
+    mv -f "${INSTALL_DIR}/${dest}.new" "${INSTALL_DIR}/${dest}"
+    ver_set "${vkey}" "${tag}"
+    rm -rf "${tmp}"
+}
+
+install_sudoku_kernel() { # <tag>
+    install_from_archive "https://github.com/${SUDOKU_REPO}/releases/download/${1}/sudoku-linux-${ARCH}.tar.gz" \
+        sudoku sudoku SUDOKU_VERSION "$1"
+}
+
+install_sing_box_kernel() { # [tag]
+    local tag="${1:-}" url
+    [[ -n "${tag}" ]] || tag=$(get_latest_tag "${SING_BOX_REPO}") || { echo "cannot resolve latest sudoku-sing-box release" >&2; return 1; }
+    url=$(latest_github_asset_url "${SING_BOX_REPO}" "^sing-box-.*-linux-${ARCH}\\.tar\\.gz\$" "${tag}") \
+        || { echo "no linux-${ARCH} asset in ${SING_BOX_REPO} ${tag}" >&2; return 1; }
+    install_from_archive "${url}" sing-box sudoku-sing-box SING_BOX_VERSION "${tag}"
+}
+
+ensure_wgcf_binary() {
+    command -v wgcf >/dev/null 2>&1 && return 0
+    local url temp_file
+    url=$(latest_github_asset_url "ViRb3/wgcf" "^wgcf_.*_linux_${ARCH}\$") || { echo "Failed to find wgcf linux-${ARCH} release asset" >&2; return 1; }
+    temp_file=$(mktemp)
+    if ! curl -fsSL "${url}" -o "${temp_file}"; then
+        rm -f "${temp_file}"
+        echo "Failed to download wgcf from: ${url}" >&2
+        return 1
+    fi
+    mv "${temp_file}" "${INSTALL_DIR}/wgcf"
+    chmod 755 "${INSTALL_DIR}/wgcf"
+    ver_set WGCF_INSTALLED 1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Install state, config context, services
+# ═══════════════════════════════════════════════════════════════════════════════
+
+service_file_exists() { # <name>
+    [[ -f "${SYSTEMD_DIR}/${1}.service" || -f "/lib/systemd/system/${1}.service" || -f "/usr/lib/systemd/system/${1}.service" ]]
+}
+
+has_existing_install() {
+    [[ -x "${INSTALL_DIR}/sudoku" || -f "${CONFIG_FILE}" ]] || service_file_exists "${SERVICE_NAME}" || service_file_exists "${SING_BOX_SERVICE_NAME}"
+}
+
+detect_mode() {
+    if service_file_exists "${SING_BOX_SERVICE_NAME}" && [[ -f "${SING_BOX_CONFIG_FILE}" ]]; then
+        WARP_ENABLED="true"
+    else
+        WARP_ENABLED="false"
+    fi
+}
+
+svc_name() { if [[ "${WARP_ENABLED}" == "true" ]]; then printf '%s' "${SING_BOX_SERVICE_NAME}"; else printf '%s' "${SERVICE_NAME}"; fi; }
+core_bin_name() { if [[ "${WARP_ENABLED}" == "true" ]]; then printf 'sudoku-sing-box'; else printf 'sudoku'; fi; }
+have_systemctl() { command -v "${SYSTEMCTL}" >/dev/null 2>&1; }
+svc_is_active() { have_systemctl && "${SYSTEMCTL}" is-active --quiet "${1:-$(svc_name)}" 2>/dev/null; }
+svc_pid() {
+    local pid
+    pid=$("${SYSTEMCTL}" show -p MainPID --value "${1:-$(svc_name)}" 2>/dev/null || true)
+    [[ "${pid}" =~ ^[0-9]+$ && "${pid}" != "0" ]] && printf '%s' "${pid}"
+}
+
+wait_for_port() { # <port> [attempts]
+    local port="$1" attempts="${2:-10}" i
+    for ((i = 0; i < attempts; i++)); do
+        is_tcp_port_in_use "${port}" && return 0
+        sleep 1
+    done
+    return 1
+}
+
+cfg_get() { jq -r "${1} // empty" "${CONFIG_FILE}" 2>/dev/null; }
+
+load_existing_config_context() {
+    [[ -f "${CONFIG_FILE}" ]] || return 1
+    local v
+    v=$(cfg_get .local_port); is_valid_port "${v}" && SUDOKU_PORT="${v}"
+    v=$(cfg_get .key); [[ -n "${v}" ]] && MASTER_PUBLIC_KEY="${v}"
+    v=$(cfg_get .custom_table); [[ -n "${v}" ]] && CUSTOM_TABLE="${v}"
+    v=$(cfg_get .fallback_address); [[ -n "${v}" ]] && SUDOKU_FALLBACK="${v}"
+    v=$(cfg_get .httpmask.disable); [[ -n "${v}" ]] && DISABLE_HTTP_MASK="${v}"
+    v=$(cfg_get .httpmask.mode); [[ -n "${v}" ]] && HTTP_MASK_MODE="${v}"
+    v=$(cfg_get .httpmask.tls); [[ -n "${v}" ]] && HTTP_MASK_TLS="${v}"
+    v=$(cfg_get .httpmask.host); [[ -n "${v}" ]] && HTTP_MASK_HOST="${v}"
+    v=$(cfg_get .httpmask.path_root); [[ -n "${v}" ]] && HTTP_MASK_PATH_ROOT="${v}"
+    v=$(cfg_get .httpmask.multiplex); [[ -n "${v}" ]] && HTTP_MASK_MULTIPLEX="${v}"
+    detect_mode
+    load_export_state || true
+    return 0
+}
+
+load_export_state() {
+    [[ -f "${EXPORT_STATE_FILE}" ]] || return 1
+    # shellcheck disable=SC1090
+    source "${EXPORT_STATE_FILE}"
+    if [[ -z "${SUDOKU_CLIENT_PORT_INPUT}" && -n "${EXPORTED_CLIENT_PORT:-}" ]]; then
+        SUDOKU_CLIENT_PORT="${EXPORTED_CLIENT_PORT}"
+    fi
+    if [[ -z "${SERVER_IP:-}" && -n "${PUBLIC_HOST:-}" ]]; then
+        SERVER_IP="${PUBLIC_HOST}"
+    fi
+    [[ -n "${EXPORTED_SUBSCRIPTION_NODE_NAME:-}" ]] && SUBSCRIPTION_NODE_NAME="${EXPORTED_SUBSCRIPTION_NODE_NAME}"
+    [[ -n "${EXPORTED_SUBSCRIPTION_OUTPUT_FILE:-}" ]] && SUBSCRIPTION_OUTPUT_FILE="${EXPORTED_SUBSCRIPTION_OUTPUT_FILE}"
+    return 0
+}
+
+persist_export_state() {
+    mkdir -p "${CONFIG_DIR}"
+    [[ -n "${SUBSCRIPTION_OUTPUT_FILE}" ]] || SUBSCRIPTION_OUTPUT_FILE="${CONFIG_DIR}/subscription.yaml"
+    cat >"${EXPORT_STATE_FILE}" <<EOF
+AVAILABLE_PRIVATE_KEY=$(printf '%q' "${AVAILABLE_PRIVATE_KEY}")
+MASTER_PUBLIC_KEY=$(printf '%q' "${MASTER_PUBLIC_KEY}")
+EXPORTED_CLIENT_PORT=$(printf '%q' "${SUDOKU_CLIENT_PORT}")
+SHORT_LINK=$(printf '%q' "${SHORT_LINK}")
+PUBLIC_HOST=$(printf '%q' "${SERVER_IP}")
+EXPORTED_SUBSCRIPTION_NODE_NAME=$(printf '%q' "${SUBSCRIPTION_NODE_NAME}")
+EXPORTED_SUBSCRIPTION_OUTPUT_FILE=$(printf '%q' "${SUBSCRIPTION_OUTPUT_FILE}")
+EOF
+    chmod 600 "${EXPORT_STATE_FILE}"
+}
+
+detect_public_ip() { # quiet; sets SERVER_IP
+    [[ -n "${SERVER_IP:-}" ]] && return 0
+    local ip="" api
+    for api in https://api.ipify.org https://ifconfig.me https://icanhazip.com https://ipinfo.io/ip https://api.ip.sb/ip; do
+        ip=$(curl -fsSL --connect-timeout 4 --max-time 8 "${api}" 2>/dev/null | tr -d '\n' || true)
+        if [[ "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "${ip}" =~ ^[0-9a-fA-F:]+$ ]]; then
+            SERVER_IP="${ip}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Make sure SERVER_IP is known for share links; ask the user if detection fails.
+ensure_server_ip() {
+    [[ -n "${SERVER_IP:-}" ]] && return 0
+    if ! detect_public_ip; then
+        warn "$(L '无法自动检测公网 IP。' 'Could not auto-detect the public IP.')"
+        [[ "${UI_TTY}" == "1" ]] || return 1
+        ui_ask "$(L '请输入服务器公网 IP 或域名:' 'Enter the server public IP or domain:')" "" is_alias || return 1
+        SERVER_IP="${ASK_RESULT}"
+    fi
+    return 0
+}
+
+generate_keypair() {
+    local out
+    out=$("${INSTALL_DIR}/sudoku" -keygen 2>&1)
+    AVAILABLE_PRIVATE_KEY=$(printf '%s\n' "$out" | sed -n 's/.*Available Private Key:[[:space:]]*\([0-9a-fA-F][0-9a-fA-F]*\).*/\1/p' | head -n 1)
+    MASTER_PUBLIC_KEY=$(printf '%s\n' "$out" | sed -n 's/.*Master Public Key:[[:space:]]*\([0-9a-fA-F][0-9a-fA-F]*\).*/\1/p' | head -n 1)
+    if [[ -z "${AVAILABLE_PRIVATE_KEY}" || -z "${MASTER_PUBLIC_KEY}" ]]; then
+        printf '%s\n' "${out}" >&2
+        return 1
+    fi
+}
+
+# A fresh client private key bound to the same master public key.
+generate_split_key() { # -> key on stdout
+    local out key
+    [[ -n "${AVAILABLE_PRIVATE_KEY}" ]] || return 1
+    out=$("${INSTALL_DIR}/sudoku" -keygen -more "${AVAILABLE_PRIVATE_KEY}" 2>&1) || { printf '%s\n' "${out}" >&2; return 1; }
+    key=$(printf '%s\n' "${out}" | sed -n 's/.*Split Private Key:[[:space:]]*\([0-9a-fA-F][0-9a-fA-F]*\).*/\1/p' | head -n 1)
+    [[ -n "${key}" ]] || { printf '%s\n' "${out}" >&2; return 1; }
+    printf '%s' "${key}"
+}
+
+generate_xpv_table() {
+    local chars=(x x p p v v v v) i j tmp r
+    for ((i = ${#chars[@]} - 1; i > 0; i--)); do
+        r=$(random_uint32)
+        j=$((r % (i + 1)))
+        tmp="${chars[i]}"; chars[i]="${chars[j]}"; chars[j]="$tmp"
+    done
+    printf '%s' "${chars[@]}"
+}
+
+create_config() {
+    mkdir -p "${CONFIG_DIR}"
+    cat >"${CONFIG_FILE}" <<EOF
+{
+  "mode": "server",
+  "transport": "tcp",
+  "local_port": ${SUDOKU_PORT},
+  "server_address": "",
+  "fallback_address": "${SUDOKU_FALLBACK}",
+  "key": "${MASTER_PUBLIC_KEY}",
+  "aead": "chacha20-poly1305",
+  "suspicious_action": "fallback",
+  "ascii": "${DEFAULT_ASCII_MODE}",
+  "padding_min": 2,
+  "padding_max": 7,
+  "custom_table": "${CUSTOM_TABLE}",
+  "enable_pure_downlink": false,
+  "httpmask": {
+    "disable": ${DISABLE_HTTP_MASK},
+    "mode": "${HTTP_MASK_MODE}",
+    "tls": ${HTTP_MASK_TLS},
+    "host": "${HTTP_MASK_HOST}",
+    "path_root": "${HTTP_MASK_PATH_ROOT}",
+    "multiplex": "${HTTP_MASK_MULTIPLEX}"
+  }
+}
+EOF
+    chmod 600 "${CONFIG_FILE}"
+    local out
+    if ! out=$("${INSTALL_DIR}/sudoku" -c "${CONFIG_FILE}" -test 2>&1); then
+        printf '%s\n' "${out}" >&2
+        return 1
+    fi
+}
+
+migrate_legacy_httpmask_config_inplace() {
+    local path="${1:-}" tmp
+    [[ -f "${path}" ]] || return 1
+    jq -e '(.httpmask? | type) == "object"' "${path}" >/dev/null 2>&1 && return 0
+    jq -e 'has("disable_http_mask") or has("http_mask_mode") or has("http_mask_tls") or has("http_mask_host") or has("path_root") or has("http_mask_path_root") or has("http_mask_multiplex")' "${path}" >/dev/null 2>&1 || return 1
+    tmp=$(mktemp)
+    if ! jq '
+        .httpmask = {
+            "disable": (.disable_http_mask // false),
+            "mode": ((.http_mask_mode // "legacy") | tostring | if . == "" then "legacy" else . end),
+            "tls": (.http_mask_tls // false),
+            "host": ((.http_mask_host // "") | tostring),
+            "path_root": (((.path_root // .http_mask_path_root // "") | tostring)),
+            "multiplex": ((.http_mask_multiplex // "off") | tostring | if . == "" then "off" else . end)
+        }
+        | del(.disable_http_mask, .http_mask_mode, .http_mask_tls, .http_mask_host, .path_root, .http_mask_path_root, .http_mask_multiplex)
+    ' "${path}" >"${tmp}"; then
+        rm -f "${tmp}"
+        return 1
+    fi
+    chmod 600 "${tmp}"
+    mv "${tmp}" "${path}"
+}
+
+configure_firewall() { # <port>
+    local port="$1"
+    if command -v ufw &>/dev/null; then
+        if ufw status 2>/dev/null | grep -q "Status: active"; then
+            ufw allow "${port}/tcp" >/dev/null 2>&1 || true
+        fi
+    elif command -v firewall-cmd &>/dev/null; then
+        if "${SYSTEMCTL}" is-active --quiet firewalld 2>/dev/null; then
+            firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1 || true
+            firewall-cmd --reload >/dev/null 2>&1 || true
+        fi
+    fi
+    return 0
+}
+
+remove_firewall_rule() { # <port>
+    local port="$1"
+    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+        ufw delete allow "${port}/tcp" >/dev/null 2>&1 || true
+    elif command -v firewall-cmd &>/dev/null && "${SYSTEMCTL}" is-active --quiet firewalld 2>/dev/null; then
+        firewall-cmd --permanent --remove-port="${port}/tcp" >/dev/null 2>&1 || true
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+create_sudoku_service() {
+    cat >"${SYSTEMD_DIR}/${SERVICE_NAME}.service" <<EOF
+[Unit]
+Description=Sudoku Proxy Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${INSTALL_DIR}/sudoku -c ${CONFIG_FILE}
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+create_sing_box_service() {
+    cat >"${SYSTEMD_DIR}/${SING_BOX_SERVICE_NAME}.service" <<EOF
+[Unit]
+Description=Sudoku sing-box server with WARP egress
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${INSTALL_DIR}/sudoku-sing-box run -c ${SING_BOX_CONFIG_FILE} -D ${SING_BOX_CACHE_DIR}
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+# Install + (re)start the service that matches WARP_ENABLED.
+create_service() {
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        "${SYSTEMCTL}" disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        "${SYSTEMCTL}" stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        rm -f "${SYSTEMD_DIR}/${SERVICE_NAME}.service"
+        create_sing_box_service
+        "${SYSTEMCTL}" daemon-reload
+        "${SYSTEMCTL}" enable "${SING_BOX_SERVICE_NAME}" >/dev/null 2>&1 || true
+        "${SYSTEMCTL}" restart "${SING_BOX_SERVICE_NAME}" || return 1
+    else
+        "${SYSTEMCTL}" disable "${SING_BOX_SERVICE_NAME}" >/dev/null 2>&1 || true
+        "${SYSTEMCTL}" stop "${SING_BOX_SERVICE_NAME}" >/dev/null 2>&1 || true
+        rm -f "${SYSTEMD_DIR}/${SING_BOX_SERVICE_NAME}.service"
+        create_sudoku_service
+        "${SYSTEMCTL}" daemon-reload
+        "${SYSTEMCTL}" enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        "${SYSTEMCTL}" restart "${SERVICE_NAME}" || return 1
+    fi
+}
+
+config_fingerprint() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "${CONFIG_FILE}" 2>/dev/null | cut -d' ' -f1
+    else
+        shasum -a 256 "${CONFIG_FILE}" 2>/dev/null | cut -d' ' -f1
+    fi
+}
+
+mark_applied() { config_fingerprint >"${APPLIED_FILE}" 2>/dev/null || true; }
+
+config_dirty() {
+    [[ -f "${APPLIED_FILE}" ]] || return 1
+    [[ "$(<"${APPLIED_FILE}")" != "$(config_fingerprint)" ]]
+}
+
+svc_restart() {
+    local port
+    have_systemctl || return 1
+    port=$(cfg_get .local_port)
+    "${SYSTEMCTL}" daemon-reload >/dev/null 2>&1 || true
+    "${SYSTEMCTL}" restart "$(svc_name)" || return 1
+    if [[ -n "${port}" ]]; then
+        wait_for_port "${port}" 12 || return 1
+    fi
+    mark_applied
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Cloudflare-style 500 fallback page (hidden default for suspicious traffic)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 should_override_fallback_address() {
-    if [[ "${CF_FALLBACK_FORCE}" == "true" ]]; then
-        return 0
-    fi
+    [[ "${CF_FALLBACK_FORCE}" == "true" ]] && return 0
     [[ "${SUDOKU_FALLBACK}" == "${DEFAULT_SUDOKU_FALLBACK}" ]]
-}
-
-ensure_cf_fallback_pydeps() {
-    mkdir -p "${FALLBACK_LIB_DIR}/pydeps"
-
-    if python3 -c 'import flask, jinja2' >/dev/null 2>&1; then
-        return 0
-    fi
-
-    if ! python3 -m pip --version >/dev/null 2>&1; then
-        info "Installing pip (required for CF fallback Python deps)..."
-        if detect_pkg_manager; then
-            case "${PKG_MANAGER}" in
-                apt|yum|dnf) install_packages python3-pip ;;
-                apk) install_packages py3-pip ;;
-                *) ;;
-            esac
-        fi
-    fi
-
-    if ! python3 -m pip --version >/dev/null 2>&1; then
-        python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
-    fi
-    if ! python3 -m pip --version >/dev/null 2>&1; then
-        return 1
-    fi
-
-    info "Installing CF fallback Python deps (Flask + Jinja2)..."
-    if ! PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_ROOT_USER_ACTION=ignore \
-        python3 -m pip install --no-cache-dir --upgrade --target "${FALLBACK_LIB_DIR}/pydeps" Flask Jinja2; then
-        return 1
-    fi
-
-    python3 -c "import sys; sys.path.insert(0, '${FALLBACK_LIB_DIR}/pydeps'); import flask, jinja2" >/dev/null 2>&1
 }
 
 write_cf_fallback_server() {
@@ -865,59 +1591,11 @@ JSON
     fi
 }
 
-download_cf_fallback_vendor() {
-    mkdir -p "${FALLBACK_LIB_DIR}"
-    local temp_dir tarball src_root
-    temp_dir=$(mktemp -d)
-    tarball="${temp_dir}/cf.tgz"
-
-    local branches=("${SUDOKU_CF_FALLBACK_BRANCH}" "main" "master")
-    local branch ok="false"
-    for branch in "${branches[@]}"; do
-        if [[ -z "${branch}" ]]; then
-            continue
-        fi
-        if curl -fsSL "https://codeload.github.com/${SUDOKU_CF_FALLBACK_REPO}/tar.gz/refs/heads/${branch}" -o "${tarball}"; then
-            ok="true"
-            break
-        fi
-    done
-    if [[ "${ok}" != "true" ]]; then
-        rm -rf "${temp_dir}"
-        return 1
-    fi
-
-    if ! tar -xzf "${tarball}" -C "${temp_dir}" >/dev/null 2>&1; then
-        rm -rf "${temp_dir}"
-        return 1
-    fi
-
-    src_root=$(find "${temp_dir}" -maxdepth 1 -type d -name 'cloudflare-error-page-*' | head -n 1)
-    if [[ -z "${src_root}" ]]; then
-        rm -rf "${temp_dir}"
-        return 1
-    fi
-
-    rm -rf "${FALLBACK_LIB_DIR}/templates" "${FALLBACK_LIB_DIR}/cloudflare_error_page"
-    cp -r "${src_root}/cloudflare_error_page" "${FALLBACK_LIB_DIR}/cloudflare_error_page"
-    mkdir -p "${FALLBACK_LIB_DIR}/cloudflare_error_page/templates"
-    cp "${src_root}/resources/styles/main.css" "${FALLBACK_LIB_DIR}/cloudflare_error_page/templates/main.css"
-    cp "${src_root}/examples/default.json" "${FALLBACK_LIB_DIR}/params.json"
-
-    rm -rf "${temp_dir}"
-    return 0
-}
-
 write_cf_fallback_service() {
-    local bind="${1:-}"
-    local port="${2:-}"
-    local pybin
+    local bind="${1:-}" port="${2:-}" pybin
     pybin=$(command -v python3 2>/dev/null || true)
-    if [[ -z "${pybin}" ]]; then
-        return 1
-    fi
-
-    cat > "/etc/systemd/system/${FALLBACK_SERVICE_NAME}.service" << EOF
+    [[ -n "${pybin}" ]] || return 1
+    cat >"${SYSTEMD_DIR}/${FALLBACK_SERVICE_NAME}.service" <<EOF
 [Unit]
 Description=Sudoku Cloudflare 500 Error Page Fallback
 After=network.target
@@ -939,693 +1617,70 @@ EOF
 }
 
 start_cf_fallback_service() {
-    local bind="${1:-}"
-    local port="${2:-}"
-
-    if ! command -v systemctl &> /dev/null; then
-        return 1
-    fi
-    if [[ ! -f "${FALLBACK_LIB_DIR}/server.py" || ! -f "${FALLBACK_LIB_DIR}/params.json" ]]; then
-        return 1
-    fi
-
+    local bind="${1:-}" port="${2:-}" url http_code
+    have_systemctl || return 1
+    [[ -f "${FALLBACK_LIB_DIR}/server.py" && -f "${FALLBACK_LIB_DIR}/params.json" ]] || return 1
     write_cf_fallback_service "${bind}" "${port}" || return 1
-    systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl stop "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
-    systemctl reset-failed "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
-    systemctl enable "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
-    systemctl restart "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || systemctl start "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
+    "${SYSTEMCTL}" daemon-reload >/dev/null 2>&1 || true
+    "${SYSTEMCTL}" stop "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
+    "${SYSTEMCTL}" reset-failed "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
+    "${SYSTEMCTL}" enable "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
+    "${SYSTEMCTL}" restart "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || "${SYSTEMCTL}" start "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
     sleep 1
-    if ! systemctl is-active --quiet "${FALLBACK_SERVICE_NAME}"; then
-        return 1
-    fi
-
-    local url http_code
+    "${SYSTEMCTL}" is-active --quiet "${FALLBACK_SERVICE_NAME}" || return 1
     url=$(build_http_url "${bind}" "${port}")
     http_code=$(curl -sS -o /dev/null -w '%{http_code}' "${url}" 2>/dev/null || true)
     [[ "${http_code}" == "500" ]]
 }
 
+# Writes the effective fallback_address into $CF_RESULT_FILE (so it survives ui_run's subshell).
+CF_RESULT_FILE=""
 setup_cf_fallback() {
-    if [[ "${CF_FALLBACK_ENABLED}" != "true" ]]; then
-        return 0
-    fi
-
-    info "Setting up Cloudflare-style 500 error page fallback (embedded, no pip required)..."
-    if ! write_cf_fallback_server; then
-        return_error "Failed to write CF fallback service files"
-    fi
+    [[ "${CF_FALLBACK_ENABLED}" == "true" ]] || return 0
+    write_cf_fallback_server || { echo "failed to write CF fallback files" >&2; return 1; }
 
     local selected_port=""
     if start_cf_fallback_service "${CF_FALLBACK_BIND}" "${CF_FALLBACK_PORT}"; then
         selected_port="${CF_FALLBACK_PORT}"
-    else
-        warn "CF fallback service failed on ${CF_FALLBACK_BIND}:${CF_FALLBACK_PORT}; trying ${CF_FALLBACK_PORT_FALLBACK}"
-        if start_cf_fallback_service "${CF_FALLBACK_BIND}" "${CF_FALLBACK_PORT_FALLBACK}"; then
-            selected_port="${CF_FALLBACK_PORT_FALLBACK}"
-        fi
+    elif start_cf_fallback_service "${CF_FALLBACK_BIND}" "${CF_FALLBACK_PORT_FALLBACK}"; then
+        selected_port="${CF_FALLBACK_PORT_FALLBACK}"
     fi
 
     if [[ -z "${selected_port}" ]]; then
-        record_nonfatal_issue "CF fallback service setup failed; using fallback_address=${SUDOKU_FALLBACK}"
-        if command -v systemctl &> /dev/null; then
-            systemctl stop "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
-            systemctl disable "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
-            rm -f "/etc/systemd/system/${FALLBACK_SERVICE_NAME}.service"
-            systemctl daemon-reload >/dev/null 2>&1 || true
-        fi
-        return 0
-    fi
-
-    success "CF fallback page listening: $(join_host_port "${CF_FALLBACK_BIND}" "${selected_port}") (always returns HTTP 500)"
-
-    if should_override_fallback_address; then
-        SUDOKU_FALLBACK=$(join_host_port "${CF_FALLBACK_BIND}" "${selected_port}")
-        success "Sudoku fallback_address -> ${SUDOKU_FALLBACK}"
-    else
-        info "Keeping user-provided SUDOKU_FALLBACK=${SUDOKU_FALLBACK}"
-    fi
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Download Binary
-# ═══════════════════════════════════════════════════════════════════════════════
-
-get_latest_version() {
-    local version
-    # GitHub API is rate-limited; fall back to the releases/latest redirect when needed.
-    version=$(
-        curl -fsSL "https://api.github.com/repos/${SUDOKU_REPO}/releases/latest" 2>/dev/null \
-            | jq -r '.tag_name' 2>/dev/null \
-            || true
-    )
-    if [[ -z "$version" || "$version" == "null" ]]; then
-        local url=""
-        url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${SUDOKU_REPO}/releases/latest" 2>/dev/null || true)
-        version="${url##*/}"
-    fi
-    if [[ -z "$version" || "$version" == "null" ]]; then
-        error "Failed to get latest version. Please check network connectivity."
-    fi
-    echo "$version"
-}
-
-download_binary() {
-    local version="$1"
-    local download_url="https://github.com/${SUDOKU_REPO}/releases/download/${version}/sudoku-linux-${ARCH}.tar.gz"
-    local temp_dir
-    temp_dir=$(mktemp -d)
-    
-    info "Downloading Sudoku ${version} for linux-${ARCH}..."
-    
-    if ! curl -fsSL "$download_url" -o "${temp_dir}/sudoku.tar.gz"; then
-        error "Failed to download binary from: $download_url"
-    fi
-    
-    tar -xzf "${temp_dir}/sudoku.tar.gz" -C "${temp_dir}"
-    
-    # Install binary
-    mv "${temp_dir}/sudoku" "${INSTALL_DIR}/sudoku"
-    chmod +x "${INSTALL_DIR}/sudoku"
-    
-    rm -rf "${temp_dir}"
-    success "Installed to ${INSTALL_DIR}/sudoku"
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Update Kernel Only (Do Not Touch Config)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-has_existing_install() {
-    [[ -x "${INSTALL_DIR}/sudoku" ]] || [[ -f "${CONFIG_DIR}/config.json" ]] || \
-        [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]] || \
-        [[ -f "/lib/systemd/system/${SERVICE_NAME}.service" ]] || \
-        [[ -f "/usr/lib/systemd/system/${SERVICE_NAME}.service" ]]
-}
-
-restart_service_if_present() {
-    if ! command -v systemctl &> /dev/null; then
-        warn "systemctl not found; please restart Sudoku manually if needed."
-        return 0
-    fi
-
-    if [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" || -f "/lib/systemd/system/${SERVICE_NAME}.service" || -f "/usr/lib/systemd/system/${SERVICE_NAME}.service" ]]; then
-        info "Restarting ${SERVICE_NAME} service..."
-        systemctl daemon-reload > /dev/null 2>&1 || true
-        systemctl restart "${SERVICE_NAME}" > /dev/null 2>&1 || systemctl start "${SERVICE_NAME}" > /dev/null 2>&1 || true
-        sleep 2
-        if systemctl is-active --quiet "${SERVICE_NAME}"; then
-            success "Service restarted successfully"
-        else
-            warn "Service may have issues. Check: journalctl -u ${SERVICE_NAME}"
-        fi
-    else
-        warn "Systemd service not found; skipped restart."
-    fi
-}
-
-extract_port_from_hostport() {
-    local hp="${1:-}"
-    if [[ -z "${hp}" ]]; then
-        return 1
-    fi
-    if [[ "${hp}" == \[*\]:* ]]; then
-        printf '%s' "${hp##*]:}"
-        return 0
-    fi
-    printf '%s' "${hp##*:}"
-}
-
-extract_host_from_hostport() {
-    local hp="${1:-}"
-    if [[ -z "${hp}" ]]; then
-        return 1
-    fi
-    if [[ "${hp}" == \[*\]:* ]]; then
-        hp="${hp#[}"
-        printf '%s' "${hp%%]:*}"
-        return 0
-    fi
-    printf '%s' "${hp%:*}"
-}
-
-unique_ports() {
-    local out=()
-    local seen=" "
-    local p
-    for p in "$@"; do
-        if [[ -z "${p}" ]]; then
-            continue
-        fi
-        if ! is_valid_port "${p}"; then
-            continue
-        fi
-        if [[ "${seen}" == *" ${p} "* ]]; then
-            continue
-        fi
-        out+=("${p}")
-        seen+=" ${p} "
-    done
-    printf '%s\n' "${out[@]}"
-}
-
-host_equivalent_for_bind() {
-    local bind="${1:-}"
-    local host="${2:-}"
-    if [[ -z "${bind}" || -z "${host}" ]]; then
-        return 1
-    fi
-    if [[ "${bind}" == "${host}" ]]; then
-        return 0
-    fi
-    case "${bind}" in
-        0.0.0.0)
-            [[ "${host}" == "127.0.0.1" || "${host}" == "0.0.0.0" ]]
-            ;;
-        ::|::0)
-            [[ "${host}" == "::1" || "${host}" == "::" ]]
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-refresh_cf_fallback_if_present() {
-    if [[ "${CF_FALLBACK_ENABLED}" != "true" ]]; then
-        return 0
-    fi
-    if ! command -v systemctl &> /dev/null; then
-        return 0
-    fi
-    if [[ ! -f "/etc/systemd/system/${FALLBACK_SERVICE_NAME}.service" && ! -f "/lib/systemd/system/${FALLBACK_SERVICE_NAME}.service" && ! -f "/usr/lib/systemd/system/${FALLBACK_SERVICE_NAME}.service" ]]; then
-        return 0
-    fi
-
-    info "Refreshing ${FALLBACK_SERVICE_NAME} assets..."
-    write_cf_fallback_server
-
-    systemctl stop "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
-    systemctl reset-failed "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
-
-    local cfg_fallback="" cfg_host="" cfg_port=""
-    if [[ -f "${CONFIG_DIR}/config.json" ]]; then
-        cfg_fallback=$(jq -r '.fallback_address // ""' "${CONFIG_DIR}/config.json" 2>/dev/null || true)
-        cfg_fallback=$(trim_space "${cfg_fallback}")
-        if [[ -n "${cfg_fallback}" ]]; then
-            cfg_host=$(extract_host_from_hostport "${cfg_fallback}" 2>/dev/null || true)
-            cfg_port=$(extract_port_from_hostport "${cfg_fallback}" 2>/dev/null || true)
-        fi
-    fi
-
-    local try_ports=""
-    if [[ -n "${cfg_host}" && -n "${cfg_port}" ]] && host_equivalent_for_bind "${CF_FALLBACK_BIND}" "${cfg_host}"; then
-        try_ports=$(unique_ports "${cfg_port}" "${CF_FALLBACK_PORT}" "${CF_FALLBACK_PORT_FALLBACK}")
-    else
-        try_ports=$(unique_ports "${CF_FALLBACK_PORT}" "${CF_FALLBACK_PORT_FALLBACK}")
-    fi
-
-    local selected_port="" p=""
-    while IFS= read -r p; do
-        if [[ -z "${p}" ]]; then
-            continue
-        fi
-        if start_cf_fallback_service "${CF_FALLBACK_BIND}" "${p}"; then
-            selected_port="${p}"
-            break
-        fi
-    done <<< "${try_ports}"
-
-    if [[ -n "${selected_port}" ]]; then
-        success "${FALLBACK_SERVICE_NAME} refreshed (listening: $(join_host_port "${CF_FALLBACK_BIND}" "${selected_port}"))"
-    else
-        warn "${FALLBACK_SERVICE_NAME} may have issues. Check: journalctl -u ${FALLBACK_SERVICE_NAME}"
-    fi
-}
-
-config_has_httpmask_object() {
-    local path="${1:-}"
-    [[ -f "${path}" ]] || return 1
-    jq -e '(.httpmask? | type) == "object"' "${path}" >/dev/null 2>&1
-}
-
-config_has_legacy_httpmask_fields() {
-    local path="${1:-}"
-    [[ -f "${path}" ]] || return 1
-    jq -e '
-        has("disable_http_mask")
-        or has("http_mask_mode")
-        or has("http_mask_tls")
-        or has("http_mask_host")
-        or has("path_root")
-        or has("http_mask_path_root")
-        or has("http_mask_multiplex")
-    ' "${path}" >/dev/null 2>&1
-}
-
-migrate_legacy_httpmask_config_inplace() {
-    local path="${1:-}"
-    [[ -f "${path}" ]] || return 1
-
-    if config_has_httpmask_object "${path}"; then
-        return 0
-    fi
-    if ! config_has_legacy_httpmask_fields "${path}"; then
+        "${SYSTEMCTL}" stop "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
+        "${SYSTEMCTL}" disable "${FALLBACK_SERVICE_NAME}" >/dev/null 2>&1 || true
+        rm -f "${SYSTEMD_DIR}/${FALLBACK_SERVICE_NAME}.service"
+        "${SYSTEMCTL}" daemon-reload >/dev/null 2>&1 || true
+        echo "fallback page failed to start; using fallback_address=${SUDOKU_FALLBACK}" >&2
         return 1
     fi
 
-    local tmp
-    tmp=$(mktemp)
-    if ! jq '
-        .httpmask = {
-            "disable": (.disable_http_mask // false),
-            "mode": ((.http_mask_mode // "legacy") | tostring | if . == "" then "legacy" else . end),
-            "tls": (.http_mask_tls // false),
-            "host": ((.http_mask_host // "") | tostring),
-            "path_root": (((.path_root // .http_mask_path_root // "") | tostring)),
-            "multiplex": ((.http_mask_multiplex // "off") | tostring | if . == "" then "off" else . end)
-        }
-        | del(
-            .disable_http_mask,
-            .http_mask_mode,
-            .http_mask_tls,
-            .http_mask_host,
-            .path_root,
-            .http_mask_path_root,
-            .http_mask_multiplex
-        )
-    ' "${path}" > "${tmp}"; then
-        rm -f "${tmp}"
-        return 1
+    if should_override_fallback_address && [[ -n "${CF_RESULT_FILE}" ]]; then
+        join_host_port "${CF_FALLBACK_BIND}" "${selected_port}" >"${CF_RESULT_FILE}"
     fi
-
-    chmod 600 "${tmp}" >/dev/null 2>&1 || true
-    mv "${tmp}" "${path}"
-    chmod 600 "${path}" >/dev/null 2>&1 || true
-    return 0
-}
-
-update_kernel_only() {
-    echo ""
-    warn "Existing installation detected. Updating binary only (config preserved)."
-    if [[ -f "${CONFIG_DIR}/config.json" ]]; then
-        info "Config preserved: ${CONFIG_DIR}/config.json"
-    fi
-
-    VERSION=$(get_latest_version)
-    download_binary "$VERSION"
-
-    if [[ -f "${CONFIG_DIR}/config.json" ]]; then
-        info "Validating existing configuration..."
-        local test_output=""
-        if ! test_output=$("${INSTALL_DIR}/sudoku" -c "${CONFIG_DIR}/config.json" -test 2>&1); then
-            warn "Config validation failed; attempting migration for legacy HTTP mask fields..."
-            if migrate_legacy_httpmask_config_inplace "${CONFIG_DIR}/config.json"; then
-                if test_output=$("${INSTALL_DIR}/sudoku" -c "${CONFIG_DIR}/config.json" -test 2>&1); then
-                    success "Config migrated and validated"
-                else
-                    echo "${test_output}" >&2
-                    error "Config remains invalid after migration: ${CONFIG_DIR}/config.json"
-                fi
-            else
-                echo "${test_output}" >&2
-                error "Config validation failed: ${CONFIG_DIR}/config.json"
-            fi
-        else
-            success "Config is valid"
-        fi
-    fi
-
-    restart_service_if_present
-    success "Kernel update complete (${VERSION})"
-}
-
-load_export_state() {
-    if [[ ! -f "${EXPORT_STATE_FILE}" ]]; then
-        return 1
-    fi
-
-    # shellcheck disable=SC1090
-    source "${EXPORT_STATE_FILE}"
-
-    if [[ -z "${SUDOKU_CLIENT_PORT_INPUT}" && -n "${EXPORTED_CLIENT_PORT:-}" ]]; then
-        SUDOKU_CLIENT_PORT="${EXPORTED_CLIENT_PORT}"
-    fi
-    if [[ -z "${SUDOKU_SUBSCRIPTION_NODE_NAME:-}" && -n "${EXPORTED_SUBSCRIPTION_NODE_NAME:-}" ]]; then
-        SUBSCRIPTION_NODE_NAME="${EXPORTED_SUBSCRIPTION_NODE_NAME}"
-    fi
-    if [[ -z "${SUDOKU_SUBSCRIPTION_PATH:-}" && -n "${EXPORTED_SUBSCRIPTION_OUTPUT_FILE:-}" ]]; then
-        SUBSCRIPTION_OUTPUT_FILE="${EXPORTED_SUBSCRIPTION_OUTPUT_FILE}"
-    fi
-
-    return 0
-}
-
-persist_export_state() {
-    mkdir -p "${CONFIG_DIR}"
-    cat > "${EXPORT_STATE_FILE}" << EOF
-AVAILABLE_PRIVATE_KEY=$(printf '%q' "${AVAILABLE_PRIVATE_KEY}")
-MASTER_PUBLIC_KEY=$(printf '%q' "${MASTER_PUBLIC_KEY}")
-EXPORTED_CLIENT_PORT=$(printf '%q' "${SUDOKU_CLIENT_PORT}")
-SHORT_LINK=$(printf '%q' "${SHORT_LINK}")
-EXPORTED_SUBSCRIPTION_NODE_NAME=$(printf '%q' "${SUBSCRIPTION_NODE_NAME}")
-EXPORTED_SUBSCRIPTION_OUTPUT_FILE=$(printf '%q' "${SUBSCRIPTION_OUTPUT_FILE}")
-EOF
-    chmod 600 "${EXPORT_STATE_FILE}"
-}
-
-load_existing_config_context() {
-    if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
-        warn "Existing config not found; cannot rebuild short link or Mihomo YAML."
-        return 1
-    fi
-
-    local cfg_port cfg_key cfg_table cfg_disable_httpmask cfg_httpmask_mode cfg_httpmask_tls cfg_httpmask_host cfg_httpmask_path_root cfg_httpmask_multiplex
-    cfg_port=$(jq -r '.local_port // empty' "${CONFIG_DIR}/config.json" 2>/dev/null || true)
-    cfg_key=$(jq -r '.key // empty' "${CONFIG_DIR}/config.json" 2>/dev/null || true)
-    cfg_table=$(jq -r '.custom_table // empty' "${CONFIG_DIR}/config.json" 2>/dev/null || true)
-    cfg_disable_httpmask=$(jq -r '.httpmask.disable // empty' "${CONFIG_DIR}/config.json" 2>/dev/null || true)
-    cfg_httpmask_mode=$(jq -r '.httpmask.mode // empty' "${CONFIG_DIR}/config.json" 2>/dev/null || true)
-    cfg_httpmask_tls=$(jq -r '.httpmask.tls // empty' "${CONFIG_DIR}/config.json" 2>/dev/null || true)
-    cfg_httpmask_host=$(jq -r '.httpmask.host // empty' "${CONFIG_DIR}/config.json" 2>/dev/null || true)
-    cfg_httpmask_path_root=$(jq -r '.httpmask.path_root // empty' "${CONFIG_DIR}/config.json" 2>/dev/null || true)
-    cfg_httpmask_multiplex=$(jq -r '.httpmask.multiplex // empty' "${CONFIG_DIR}/config.json" 2>/dev/null || true)
-
-    cfg_port=$(trim_space "${cfg_port}")
-    cfg_key=$(trim_space "${cfg_key}")
-    cfg_table=$(trim_space "${cfg_table}")
-
-    if is_valid_port "${cfg_port}"; then
-        SUDOKU_PORT="${cfg_port}"
-    fi
-    if [[ -n "${cfg_key}" ]]; then
-        MASTER_PUBLIC_KEY="${cfg_key}"
-    fi
-    if [[ -n "${cfg_table}" && "${cfg_table}" != "null" ]]; then
-        CUSTOM_TABLE="${cfg_table}"
-    fi
-    if [[ -n "${cfg_disable_httpmask}" && "${cfg_disable_httpmask}" != "null" ]]; then
-        DISABLE_HTTP_MASK="${cfg_disable_httpmask}"
-    fi
-    if [[ -n "${cfg_httpmask_mode}" && "${cfg_httpmask_mode}" != "null" ]]; then
-        HTTP_MASK_MODE="${cfg_httpmask_mode}"
-    fi
-    if [[ -n "${cfg_httpmask_tls}" && "${cfg_httpmask_tls}" != "null" ]]; then
-        HTTP_MASK_TLS="${cfg_httpmask_tls}"
-    fi
-    if [[ -n "${cfg_httpmask_host}" && "${cfg_httpmask_host}" != "null" ]]; then
-        HTTP_MASK_HOST="${cfg_httpmask_host}"
-    fi
-    if [[ -n "${cfg_httpmask_path_root}" && "${cfg_httpmask_path_root}" != "null" ]]; then
-        HTTP_MASK_PATH_ROOT="${cfg_httpmask_path_root}"
-    fi
-    if [[ -n "${cfg_httpmask_multiplex}" && "${cfg_httpmask_multiplex}" != "null" ]]; then
-        HTTP_MASK_MULTIPLEX="${cfg_httpmask_multiplex}"
-    fi
-
-    return 0
-}
-
-prepare_existing_install_output() {
-    if ! load_existing_config_context; then
-        return 1
-    fi
-
-    get_public_ip
-
-    if ! load_export_state; then
-        warn "Export state not found at ${EXPORT_STATE_FILE}; cannot rebuild short link or Mihomo YAML for this older installation."
-        return 1
-    fi
-
-    if [[ -z "${AVAILABLE_PRIVATE_KEY:-}" ]]; then
-        warn "Client export key missing in ${EXPORT_STATE_FILE}; cannot rebuild short link or Mihomo YAML."
-        return 1
-    fi
-
-    generate_short_link
-    generate_subscription_config
-
-    persist_export_state
     return 0
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Key Generation
+# WARP egress (sudoku-sing-box + wgcf)
 # ═══════════════════════════════════════════════════════════════════════════════
-
-generate_keypair() {
-    info "Generating keypair..."
-    
-    local keygen_output
-    keygen_output=$("${INSTALL_DIR}/sudoku" -keygen 2>&1)
-    
-    AVAILABLE_PRIVATE_KEY=$(
-        printf '%s\n' "$keygen_output" \
-            | sed -n 's/.*Available Private Key:[[:space:]]*\([0-9a-fA-F][0-9a-fA-F]*\).*/\1/p' \
-            | head -n 1
-    )
-    MASTER_PUBLIC_KEY=$(
-        printf '%s\n' "$keygen_output" \
-            | sed -n 's/.*Master Public Key:[[:space:]]*\([0-9a-fA-F][0-9a-fA-F]*\).*/\1/p' \
-            | head -n 1
-    )
-    
-    if [[ -z "$AVAILABLE_PRIVATE_KEY" || -z "$MASTER_PUBLIC_KEY" ]]; then
-        echo "${keygen_output}" >&2
-        error "Failed to generate keypair"
-    fi
-    
-    success "Keypair generated successfully"
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# IP Detection
-# ═══════════════════════════════════════════════════════════════════════════════
-
-get_public_ip() {
-    if [[ -n "${SERVER_IP:-}" ]]; then
-        success "Public host: ${SERVER_IP}"
-        return 0
-    fi
-
-    local ip=""
-    local apis=(
-        "https://api.ipify.org"
-        "https://ifconfig.me"
-        "https://icanhazip.com"
-        "https://ipinfo.io/ip"
-        "https://api.ip.sb/ip"
-    )
-    
-    info "Detecting public IP address..."
-    
-    for api in "${apis[@]}"; do
-        ip=$(curl -fsSL --connect-timeout 5 "$api" 2>/dev/null | tr -d '\n')
-        if [[ -n "$ip" ]]; then
-            # Basic IPv4 / IPv6 check (best effort).
-            if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
-                SERVER_IP="$ip"
-                success "Public IP: $SERVER_IP"
-                return 0
-            fi
-        fi
-    done
-    
-    error "Failed to detect public IP. Please set SERVER_IP manually."
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# X/P/V Custom Table (Sudoku v0.1.4+)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-generate_xpv_table() {
-    local chars=(x x p p v v v v)
-    local i j tmp r
-
-    for ((i=${#chars[@]}-1; i>0; i--)); do
-        r=$(random_uint32)
-        j=$((r % (i+1)))
-        tmp="${chars[i]}"
-        chars[i]="${chars[j]}"
-        chars[j]="$tmp"
-    done
-
-    printf '%s' "${chars[@]}"
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Configuration
-# ═══════════════════════════════════════════════════════════════════════════════
-
-create_config() {
-    info "Creating server configuration..."
-    
-    mkdir -p "$CONFIG_DIR"
-    
-    cat > "${CONFIG_DIR}/config.json" << EOF
-{
-  "mode": "server",
-  "transport": "tcp",
-  "local_port": ${SUDOKU_PORT},
-  "server_address": "",
-  "fallback_address": "${SUDOKU_FALLBACK}",
-  "key": "${MASTER_PUBLIC_KEY}",
-  "aead": "chacha20-poly1305",
-  "suspicious_action": "fallback",
-  "ascii": "${DEFAULT_ASCII_MODE}",
-  "padding_min": 2,
-  "padding_max": 7,
-  "custom_table": "${CUSTOM_TABLE}",
-  "enable_pure_downlink": false,
-  "httpmask": {
-    "disable": ${DISABLE_HTTP_MASK},
-    "mode": "${HTTP_MASK_MODE}",
-    "tls": ${HTTP_MASK_TLS},
-    "host": "${HTTP_MASK_HOST}",
-    "path_root": "${HTTP_MASK_PATH_ROOT}",
-    "multiplex": "${HTTP_MASK_MULTIPLEX}"
-  }
-}
-EOF
-    
-    chmod 600 "${CONFIG_DIR}/config.json"
-
-    info "Testing server configuration..."
-    local test_output
-    if ! test_output=$("${INSTALL_DIR}/sudoku" -c "${CONFIG_DIR}/config.json" -test 2>&1); then
-        echo "${test_output}" >&2
-        error "Config validation failed: ${CONFIG_DIR}/config.json"
-    fi
-    success "Configuration validated"
-
-    success "Configuration saved to ${CONFIG_DIR}/config.json"
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Optional WARP Egress (Sudoku-native sing-box)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-latest_github_asset_url() {
-    local repo="${1:-}"
-    local pattern="${2:-}"
-    local url=""
-    [[ -n "${repo}" && -n "${pattern}" ]] || return 1
-
-    url=$(
-        curl -fsSL "https://api.github.com/repos/${repo}/releases/latest" \
-            | jq -r --arg pattern "${pattern}" '.assets[] | select(.name | test($pattern)) | .browser_download_url' \
-            | head -n 1
-    )
-    [[ -n "${url}" && "${url}" != "null" ]] || return 1
-    printf '%s' "${url}"
-}
-
-ensure_wgcf_binary() {
-    if command -v wgcf >/dev/null 2>&1; then
-        return 0
-    fi
-
-    local url temp_file
-    info "Installing wgcf for automatic WARP profile generation..."
-    url=$(latest_github_asset_url "ViRb3/wgcf" "^wgcf_.*_linux_${ARCH}$") || error "Failed to find wgcf linux-${ARCH} release asset"
-    temp_file=$(mktemp)
-    if ! curl -fsSL "${url}" -o "${temp_file}"; then
-        rm -f "${temp_file}"
-        error "Failed to download wgcf from: ${url}"
-    fi
-    mv "${temp_file}" "${INSTALL_DIR}/wgcf"
-    chmod 755 "${INSTALL_DIR}/wgcf"
-    success "wgcf installed to ${INSTALL_DIR}/wgcf"
-}
-
-ensure_sudoku_sing_box_binary() {
-    if command -v sudoku-sing-box >/dev/null 2>&1; then
-        return 0
-    fi
-
-    local url temp_dir binary
-    info "Installing Sudoku-enabled sing-box for WARP egress..."
-    url=$(latest_github_asset_url "SUDOKU-ASCII/sudoku-sing-box" "^sing-box-.*-linux-${ARCH}\\.tar\\.gz$") || error "Failed to find sudoku-sing-box linux-${ARCH} release asset"
-    temp_dir=$(mktemp -d)
-    if ! curl -fsSL "${url}" -o "${temp_dir}/sing-box.tar.gz"; then
-        rm -rf "${temp_dir}"
-        error "Failed to download sudoku-sing-box from: ${url}"
-    fi
-    tar -xzf "${temp_dir}/sing-box.tar.gz" -C "${temp_dir}"
-    binary=$(find "${temp_dir}" -type f -name sing-box | head -n 1)
-    if [[ -z "${binary}" ]]; then
-        rm -rf "${temp_dir}"
-        error "Downloaded sudoku-sing-box archive did not contain a sing-box binary"
-    fi
-    mv "${binary}" "${INSTALL_DIR}/sudoku-sing-box"
-    chmod 755 "${INSTALL_DIR}/sudoku-sing-box"
-    rm -rf "${temp_dir}"
-    success "sudoku-sing-box installed to ${INSTALL_DIR}/sudoku-sing-box"
-}
 
 ensure_warp_profile() {
-    ensure_wgcf_binary
-
+    ensure_wgcf_binary || return 1
     mkdir -p "${SUDOKU_WARP_DIR}"
     chmod 700 "${SUDOKU_WARP_DIR}"
-
     if [[ -f "${SUDOKU_WARP_PROFILE}" ]] && grep -q '^PrivateKey[[:space:]]*=' "${SUDOKU_WARP_PROFILE}" && grep -q '^PublicKey[[:space:]]*=' "${SUDOKU_WARP_PROFILE}"; then
-        success "Existing WARP profile found: ${SUDOKU_WARP_PROFILE}"
         return 0
     fi
-
-    info "Registering a free Cloudflare WARP device with wgcf..."
     (
-        cd "${SUDOKU_WARP_DIR}"
+        cd "${SUDOKU_WARP_DIR}" || exit 1
         umask 077
         if [[ ! -f wgcf-account.toml ]]; then
-            wgcf register --accept-tos
+            wgcf register --accept-tos || exit 1
         fi
-        wgcf generate --profile "$(basename "${SUDOKU_WARP_PROFILE}")"
-    )
+        wgcf generate --profile "$(basename "${SUDOKU_WARP_PROFILE}")" || exit 1
+    ) || return 1
     chmod 600 "${SUDOKU_WARP_DIR}/wgcf-account.toml" "${SUDOKU_WARP_PROFILE}" 2>/dev/null || true
-    success "WARP WireGuard profile generated"
 }
 
 write_sing_box_warp_config() {
@@ -1784,184 +1839,64 @@ config = {
 
 output_path.write_text(json.dumps(config, indent=2) + "\n")
 PY
-
     chmod 600 "${SING_BOX_CONFIG_FILE}"
-    if ! sudoku-sing-box check -c "${SING_BOX_CONFIG_FILE}" >/tmp/sudoku-sing-box-check.log 2>&1; then
-        cat /tmp/sudoku-sing-box-check.log >&2 || true
-        error "sudoku-sing-box WARP config validation failed: ${SING_BOX_CONFIG_FILE}"
-    fi
-    success "sudoku-sing-box WARP config saved to ${SING_BOX_CONFIG_FILE}"
+    sync_singbox_users "${CONFIG_FILE}" "${SING_BOX_CONFIG_FILE}" || return 1
+    "${INSTALL_DIR}/sudoku-sing-box" check -c "${SING_BOX_CONFIG_FILE}" 2>&1 || { echo "sudoku-sing-box WARP config validation failed: ${SING_BOX_CONFIG_FILE}" >&2; return 1; }
 }
 
-create_sing_box_service() {
-    cat > "/etc/systemd/system/${SING_BOX_SERVICE_NAME}.service" << EOF
-[Unit]
-Description=Sudoku sing-box server with WARP egress
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=${INSTALL_DIR}/sudoku-sing-box run -c ${SING_BOX_CONFIG_FILE} -D ${SING_BOX_CACHE_DIR}
-Restart=on-failure
-RestartSec=5
-LimitNOFILE=1048576
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-NoNewPrivileges=true
-
-[Install]
-WantedBy=multi-user.target
-EOF
+# Copy .users from a sudoku server config into the sudoku-in inbound of a sing-box config.
+sync_singbox_users() { # <sudoku-config> <singbox-config-to-patch>
+    local src="$1" dst="$2" tmp
+    [[ -f "${src}" && -f "${dst}" ]] || return 0
+    tmp=$(mktemp)
+    if ! jq --slurpfile c "${src}" '
+        ($c[0].users // []) as $u
+        | .inbounds |= map(if .tag == "sudoku-in" then (if ($u | length) > 0 then .users = $u else del(.users) end) else . end)
+    ' "${dst}" >"${tmp}"; then
+        rm -f "${tmp}"
+        return 1
+    fi
+    chmod 600 "${tmp}"
+    mv "${tmp}" "${dst}"
 }
 
 remove_legacy_warp_tun_service() {
-    systemctl stop "sudoku-singbox-route" 2>/dev/null || true
-    systemctl disable "sudoku-singbox-route" 2>/dev/null || true
+    "${SYSTEMCTL}" stop "sudoku-singbox-route" 2>/dev/null || true
+    "${SYSTEMCTL}" disable "sudoku-singbox-route" 2>/dev/null || true
     if [[ -x "/usr/local/sbin/sudoku-singbox-route" ]]; then
         "/usr/local/sbin/sudoku-singbox-route" stop >/dev/null 2>&1 || true
     fi
-    rm -f "/etc/systemd/system/sudoku-singbox-route.service"
-    rm -f "/usr/local/sbin/sudoku-singbox-route"
+    rm -f "${SYSTEMD_DIR}/sudoku-singbox-route.service" "/usr/local/sbin/sudoku-singbox-route"
 }
 
-setup_warp_egress() {
-    if [[ "${WARP_ENABLED}" != "true" ]]; then
-        return 0
-    fi
-
-    info "Setting up Sudoku-native sing-box with WARP egress..."
-    remove_legacy_warp_tun_service
-    ensure_sudoku_sing_box_binary
-    ensure_warp_profile
-    write_sing_box_warp_config
-    create_sing_box_service
-
-    systemctl daemon-reload
-    if ! systemctl enable --now "${SING_BOX_SERVICE_NAME}" >/dev/null 2>&1; then
-        systemctl status "${SING_BOX_SERVICE_NAME}" --no-pager -l >&2 || true
-        error "Failed to enable/start ${SING_BOX_SERVICE_NAME}"
-    fi
-    if ! systemctl restart "${SING_BOX_SERVICE_NAME}"; then
-        systemctl status "${SING_BOX_SERVICE_NAME}" --no-pager -l >&2 || true
-        journalctl -u "${SING_BOX_SERVICE_NAME}" -n 60 --no-pager >&2 || true
-        error "Failed to restart ${SING_BOX_SERVICE_NAME}"
-    fi
-
-    success "WARP egress enabled for Sudoku inbound traffic"
+cleanup_legacy_subscription_https() {
+    have_systemctl || return 0
+    "${SYSTEMCTL}" stop "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null || true
+    "${SYSTEMCTL}" disable "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null || true
+    "${SYSTEMCTL}" stop "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null || true
+    "${SYSTEMCTL}" disable "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null || true
+    rm -f "${SYSTEMD_DIR}/${LEGACY_SUBSCRIPTION_SERVICE_NAME}.service" \
+        "${SYSTEMD_DIR}/${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" \
+        "${SYSTEMD_DIR}/sudoku-acme-renew.service"
+    rm -rf "${LEGACY_SUBSCRIPTION_LIB_DIR}" "${LEGACY_SUBSCRIPTION_CERT_DIR}"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Firewall Configuration
+# Client exports (short link / Mihomo node YAML), optionally for a specific user key
 # ═══════════════════════════════════════════════════════════════════════════════
 
-configure_firewall() {
-    if command -v ufw &> /dev/null; then
-        if ufw status | grep -q "Status: active"; then
-            info "Configuring UFW firewall..."
-            ufw allow "${SUDOKU_PORT}/tcp" > /dev/null 2>&1
-            success "UFW: Opened port ${SUDOKU_PORT}/tcp"
-        fi
-    elif command -v firewall-cmd &> /dev/null; then
-        if systemctl is-active --quiet firewalld; then
-            info "Configuring firewalld..."
-            firewall-cmd --permanent --add-port="${SUDOKU_PORT}/tcp" > /dev/null 2>&1
-            firewall-cmd --reload > /dev/null 2>&1
-            success "firewalld: Opened port ${SUDOKU_PORT}/tcp"
-        fi
-    fi
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Systemd Service
-# ═══════════════════════════════════════════════════════════════════════════════
-
-create_service() {
-    if [[ "${WARP_ENABLED}" == "true" ]]; then
-        systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
-        systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
-        rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
-        systemctl daemon-reload
-        success "Sudoku is served by ${SING_BOX_SERVICE_NAME}"
-        return 0
-    fi
-
-    info "Creating systemd service..."
-    
-    cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
-[Unit]
-Description=Sudoku Proxy Server
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=${INSTALL_DIR}/sudoku -c ${CONFIG_DIR}/config.json
-Restart=on-failure
-RestartSec=5
-LimitNOFILE=1048576
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    
-    systemctl daemon-reload
-    systemctl enable "${SERVICE_NAME}" > /dev/null 2>&1
-    systemctl restart "${SERVICE_NAME}" > /dev/null 2>&1 || systemctl start "${SERVICE_NAME}"
-    
-    sleep 2
-    
-    if systemctl is-active --quiet "${SERVICE_NAME}"; then
-        success "Service started successfully"
-    else
-        warn "Service may have issues. Check: journalctl -u ${SERVICE_NAME}"
-    fi
-}
-
-wait_for_sudoku_port() {
-    local attempts="${1:-10}"
-    local delay="${2:-1}"
-    local attempt
-    for attempt in $(seq 1 "${attempts}"); do
-        if is_tcp_port_in_use "${SUDOKU_PORT}"; then
-            return 0
-        fi
-        sleep "${delay}"
-    done
-    return 1
-}
-
-ensure_sudoku_core_ready() {
-    if ! wait_for_sudoku_port 10 1; then
-        local log_service="${SERVICE_NAME}"
-        if [[ "${WARP_ENABLED}" == "true" ]]; then
-            log_service="${SING_BOX_SERVICE_NAME}"
-        fi
-        error "Sudoku core did not open port ${SUDOKU_PORT}. Check: journalctl -u ${log_service}"
-    fi
-    SUDOKU_CORE_READY="true"
-    success "Sudoku core is listening on port ${SUDOKU_PORT}"
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Generate Short Link
-# ═══════════════════════════════════════════════════════════════════════════════
-
-generate_short_link() {
-    info "Generating sudoku:// short link..."
-
-    local temp_dir temp_cfg export_output
-    temp_dir=$(mktemp -d)
-    temp_cfg="${temp_dir}/client.json"
-    local server_address
+make_short_link() { # <client-private-key> -> link on stdout
+    local key="$1" tmp cfg out link server_address
+    tmp=$(mktemp -d)
+    cfg="${tmp}/client.json"
     server_address=$(join_host_port "${SERVER_IP}" "${SUDOKU_PORT}")
-
-    cat > "${temp_cfg}" << EOF
+    cat >"${cfg}" <<EOF
 {
   "mode": "client",
   "transport": "tcp",
   "local_port": ${SUDOKU_CLIENT_PORT},
   "server_address": "${server_address}",
-  "key": "${AVAILABLE_PRIVATE_KEY}",
+  "key": "${key}",
   "aead": "chacha20-poly1305",
   "ascii": "${DEFAULT_ASCII_MODE}",
   "padding_min": 5,
@@ -1979,21 +1914,15 @@ generate_short_link() {
   "rule_urls": ["global"]
 }
 EOF
-
-    export_output=$("${INSTALL_DIR}/sudoku" -c "${temp_cfg}" -export-link 2>&1 || true)
-    SHORT_LINK=$(printf '%s\n' "${export_output}" | grep -Eo 'sudoku://[^[:space:]]+' | tail -n 1)
-    rm -rf "${temp_dir}"
-
-    if [[ -z "${SHORT_LINK}" ]]; then
-        echo "${export_output}" >&2
-        error "Failed to generate short link"
+    out=$("${INSTALL_DIR}/sudoku" -c "${cfg}" -export-link 2>&1 || true)
+    link=$(printf '%s\n' "${out}" | grep -Eo 'sudoku://[^[:space:]]+' | tail -n 1)
+    rm -rf "${tmp}"
+    if [[ -z "${link}" ]]; then
+        printf '%s\n' "${out}" >&2
+        return 1
     fi
-    success "Short link generated"
+    printf '%s' "${link}"
 }
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Generate Local Mihomo YAML
-# ═══════════════════════════════════════════════════════════════════════════════
 
 write_default_subscription_template() {
     local output_file="${1:-}"
@@ -2061,12 +1990,11 @@ fetch_subscription_template() {
     local remote_template="${output_dir}/template.remote.yaml"
     write_default_subscription_template "${default_template}"
     if [[ -n "${SUBSCRIPTION_TEMPLATE_URL}" ]]; then
-        info "Downloading subscription template..."
         if curl -fsSL "${SUBSCRIPTION_TEMPLATE_URL}" -o "${remote_template}"; then
             printf '%s' "${remote_template}"
             return 0
         fi
-        warn "Failed to download remote subscription template. Falling back to built-in template."
+        true
     fi
     printf '%s' "${default_template}"
 }
@@ -2102,7 +2030,6 @@ render_node_yaml() {
 }
 
 generate_subscription_config() {
-    info "Generating local Mihomo YAML..."
 
     local temp_dir template_file head_file tail_file
     temp_dir=$(mktemp -d)
@@ -2156,256 +2083,1143 @@ generate_subscription_config() {
 
     chmod 600 "${SUBSCRIPTION_OUTPUT_FILE}"
     rm -rf "${temp_dir}"
-    success "Mihomo YAML generated: ${SUBSCRIPTION_OUTPUT_FILE}"
-}
-
-cleanup_legacy_subscription_https() {
-    if ! command -v systemctl >/dev/null 2>&1; then
-        return 0
-    fi
-
-    local changed="false"
-    if systemctl is-active --quiet "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null \
-        || systemctl is-enabled --quiet "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null \
-        || [[ -f "/etc/systemd/system/${LEGACY_SUBSCRIPTION_SERVICE_NAME}.service" ]]; then
-        changed="true"
-    fi
-    if systemctl is-active --quiet "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null \
-        || systemctl is-enabled --quiet "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null \
-        || [[ -f "/etc/systemd/system/${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" ]] \
-        || [[ -f "/etc/systemd/system/sudoku-acme-renew.service" ]]; then
-        changed="true"
-    fi
-
-    systemctl stop "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null || true
-    systemctl disable "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null || true
-    systemctl stop "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null || true
-    systemctl disable "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${LEGACY_SUBSCRIPTION_SERVICE_NAME}.service"
-    rm -f "/etc/systemd/system/${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}"
-    rm -f "/etc/systemd/system/sudoku-acme-renew.service"
-    rm -rf "${LEGACY_SUBSCRIPTION_LIB_DIR}" "${LEGACY_SUBSCRIPTION_CERT_DIR}"
-
-    if [[ "${changed}" == "true" ]]; then
-        systemctl daemon-reload
-        success "Removed legacy HTTPS subscription and ACME services"
-    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Output Results
+# dash self-install / update
 # ═══════════════════════════════════════════════════════════════════════════════
 
-print_results() {
-    echo ""
-    echo -e "${GREEN}═══════════════════════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}${BOLD}  Installation Complete!${NC}"
-    echo -e "${GREEN}═══════════════════════════════════════════════════════════════════════════════${NC}"
-    echo ""
-    
-    echo -e "${CYAN}${BOLD}📱 Short Link (for sudoku client):${NC}"
-    echo -e "${YELLOW}${SHORT_LINK}${NC}"
-    echo ""
-    
-    echo -e "${CYAN}${BOLD}📋 Mihomo YAML Path:${NC}"
-    echo -e "${YELLOW}${SUBSCRIPTION_OUTPUT_FILE}${NC}"
-    echo ""
+DASH_SELF="${BASH_SOURCE[0]:-$0}"
 
-    echo -e "${CYAN}${BOLD}🧩 Standalone Mihomo Node YAML:${NC}"
-    printf '%s\n' "${NODE_YAML}"
-    echo ""
-    
-    echo -e "${CYAN}${BOLD}🔑 Keys (save these securely):${NC}"
-    echo -e "  Client Key (Private): ${YELLOW}${AVAILABLE_PRIVATE_KEY}${NC}"
-    echo -e "  Server Key (Public):  ${YELLOW}${MASTER_PUBLIC_KEY}${NC}"
-    echo ""
-    
-    echo -e "${CYAN}${BOLD}⚙️  Service Management:${NC}"
-    if [[ "${WARP_ENABLED}" == "true" ]]; then
-        echo -e "  Status:  ${YELLOW}systemctl status ${SING_BOX_SERVICE_NAME}${NC}"
+install_dash_self() {
+    local tmp
+    mkdir -p "${INSTALL_DIR}"
+    tmp=$(mktemp)
+    if [[ -f "${DASH_SELF}" ]] && grep -q 'SUDOKU-DASH-MARKER' "${DASH_SELF}" 2>/dev/null; then
+        cp "${DASH_SELF}" "${tmp}"
     else
-        echo -e "  Status:  ${YELLOW}systemctl status ${SERVICE_NAME}${NC}"
+        curl -fsSL --connect-timeout 10 "${DASH_URL}" -o "${tmp}" || { rm -f "${tmp}"; echo "failed to download ${DASH_URL}" >&2; return 1; }
     fi
-    if [[ "${WARP_ENABLED}" == "true" ]]; then
-        echo -e "  Restart: ${YELLOW}systemctl restart ${SING_BOX_SERVICE_NAME}${NC}"
-    else
-        echo -e "  Restart: ${YELLOW}systemctl restart ${SERVICE_NAME}${NC}"
+    if ! grep -q 'SUDOKU-DASH-MARKER' "${tmp}" || ! bash -n "${tmp}" 2>/dev/null; then
+        rm -f "${tmp}"
+        echo "downloaded dash script is invalid" >&2
+        return 1
     fi
-    if [[ "${WARP_ENABLED}" == "true" ]]; then
-        echo -e "  Logs:    ${YELLOW}journalctl -u ${SING_BOX_SERVICE_NAME} -f${NC}"
-    else
-        echo -e "  Logs:    ${YELLOW}journalctl -u ${SERVICE_NAME} -f${NC}"
+    install -m 755 "${tmp}" "${DASH_BIN}.new" && mv -f "${DASH_BIN}.new" "${DASH_BIN}"
+    rm -f "${tmp}"
+    # Never shadow Debian's /bin/dash: only add the short name when it is free.
+    if ! command -v dash >/dev/null 2>&1; then
+        ln -sf "${DASH_BIN}" "${INSTALL_DIR}/dash"
     fi
-    echo ""
-    
-    echo -e "${CYAN}${BOLD}📂 Configuration:${NC}"
-    echo -e "  Config file: ${YELLOW}${CONFIG_DIR}/config.json${NC}"
-    echo -e "  Mihomo YAML: ${YELLOW}${SUBSCRIPTION_OUTPUT_FILE}${NC}"
-    if [[ -f "${EXPORT_STATE_FILE}" ]]; then
-        echo -e "  Export state: ${YELLOW}${EXPORT_STATE_FILE}${NC}"
-    fi
-    if [[ "${WARP_ENABLED}" == "true" ]]; then
-        echo -e "  WARP config:  ${YELLOW}${SING_BOX_CONFIG_FILE}${NC}"
-        echo -e "  WARP binary:  ${YELLOW}${INSTALL_DIR}/sudoku-sing-box${NC}"
-    fi
-    echo -e "  Binary:      ${YELLOW}${INSTALL_DIR}/sudoku${NC}"
-    echo ""
+}
 
-    if [[ ${#NONFATAL_ISSUES[@]} -gt 0 ]]; then
-        echo -e "${CYAN}${BOLD}⚠️  Non-blocking Issues:${NC}"
-        local issue
-        for issue in "${NONFATAL_ISSUES[@]}"; do
-            echo -e "  ${YELLOW}${issue}${NC}"
-        done
-        echo ""
-    fi
-
-    echo -e "${CYAN}${BOLD}🧹 Uninstall:${NC}"
-    printf '  %b%s%b\n' "${YELLOW}" 'sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)" -- --uninstall' "${NC}"
-    echo ""
+remote_dash_version() {
+    curl -fsSL --connect-timeout 8 --max-time 15 "${DASH_URL}" 2>/dev/null | sed -n 's/^DASH_VERSION="\(.*\)"$/\1/p' | head -n 1
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Uninstall Function
+# Installer wizard
 # ═══════════════════════════════════════════════════════════════════════════════
 
-uninstall() {
-    echo -e "${RED}Uninstalling Sudoku...${NC}"
-    local uninstall_port="${SUDOKU_PORT}"
+CURRENT_PORT_FOR_VALIDATION=""
+is_free_port() {
+    is_valid_port "${1:-}" || return 1
+    [[ "${1}" == "${CURRENT_PORT_FOR_VALIDATION}" ]] && return 0
+    if is_tcp_port_in_use "${1}"; then
+        err "$(L "端口 ${1} 已被占用。" "Port ${1} is already in use.")"
+        return 1
+    fi
+    return 0
+}
 
-    if [[ -f "${CONFIG_DIR}/config.json" ]]; then
-        uninstall_port=$(jq -r '.local_port // empty' "${CONFIG_DIR}/config.json" 2>/dev/null || true)
-        uninstall_port=$(trim_space "${uninstall_port}")
-        if ! is_valid_port "${uninstall_port}"; then
-            uninstall_port="${SUDOKU_PORT}"
+show_header() {
+    ui_clear
+    ui_logo
+}
+
+wizard_questions() {
+    local suggested
+    if [[ -z "${SUDOKU_PORT}" ]]; then
+        suggested=$(pick_random_high_port)
+        if [[ "${UI_TTY}" == "1" && "${ASSUME_YES}" != "1" ]]; then
+            ui_title "$(L '服务端口' 'Server port')"
+            dim "  $(L '直接回车使用随机端口，或输入 1-65535 的自定义端口。' 'Press Enter for a random port, or type your own (1-65535).')"
+            printf '\n'
+            ui_ask "$(L '端口' 'Port')" "${suggested}" is_free_port
+            SUDOKU_PORT="${ASK_RESULT}"
+        else
+            SUDOKU_PORT="${suggested}"
         fi
+    elif is_tcp_port_in_use "${SUDOKU_PORT}"; then
+        die "$(L "端口 ${SUDOKU_PORT} 已被占用。" "Port ${SUDOKU_PORT} is already in use.")"
     fi
-    
-    systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
-    systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
-    systemctl daemon-reload
 
-    remove_legacy_warp_tun_service
-
-    systemctl stop "${SING_BOX_SERVICE_NAME}" 2>/dev/null || true
-    systemctl disable "${SING_BOX_SERVICE_NAME}" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${SING_BOX_SERVICE_NAME}.service"
-    rm -f "${SING_BOX_CONFIG_FILE}"
-    rm -rf "${SING_BOX_CACHE_DIR}"
-    systemctl daemon-reload
-
-    systemctl stop "${FALLBACK_SERVICE_NAME}" 2>/dev/null || true
-    systemctl disable "${FALLBACK_SERVICE_NAME}" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${FALLBACK_SERVICE_NAME}.service"
-    systemctl daemon-reload
-
-    systemctl stop "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null || true
-    systemctl disable "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${LEGACY_SUBSCRIPTION_SERVICE_NAME}.service"
-
-    systemctl stop "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null || true
-    systemctl disable "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}"
-    rm -f "/etc/systemd/system/sudoku-acme-renew.service"
-    systemctl daemon-reload
-
-    rm -f "${INSTALL_DIR}/sudoku"
-    rm -rf "${CONFIG_DIR}"
-    rm -rf "${FALLBACK_LIB_DIR}"
-    rm -rf "${LEGACY_SUBSCRIPTION_LIB_DIR}"
-    
-    # Remove firewall rule
-    if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
-        ufw delete allow "${uninstall_port}/tcp" > /dev/null 2>&1 || true
+    if [[ -z "${SUDOKU_WARP_PRESET}" && "${UI_TTY}" == "1" && "${ASSUME_YES}" != "1" ]]; then
+        ui_title "$(L 'Cloudflare WARP 出口' 'Cloudflare WARP egress')"
+        dim "  $(L '让代理流量经 Cloudflare WARP 出站：隐藏 VPS 出口 IP，并可解锁部分地区限制。' 'Send proxied traffic out through Cloudflare WARP: hides the VPS egress IP and can unlock geo-restricted sites.')"
+        printf '\n'
+        if ui_confirm "$(L '启用 WARP？' 'Enable WARP?')" n; then WARP_ENABLED="true"; else WARP_ENABLED="false"; fi
     fi
-    
-    echo -e "${GREEN}Uninstallation complete.${NC}"
-    exit 0
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Main
-# ═══════════════════════════════════════════════════════════════════════════════
-
-main() {
-    # Handle uninstall
-    if [[ "${1:-}" == "--uninstall" || "${1:-}" == "-u" || "${0:-}" == "--uninstall" || "${0:-}" == "-u" ]]; then
-        uninstall
-    fi
-    
-    print_banner
-    
-    info "Starting installation..."
-    echo ""
-    
-    # Pre-flight checks
-    check_root
+run_install() {
     detect_os
     detect_arch
+    ensure_root "${ORIG_ARGS[@]}"
+    have_systemctl || dev_mode || die "$(L '需要 systemd（找不到 systemctl）。' 'systemd is required (systemctl not found).')"
     normalize_settings
+
+    show_header
+    printf '  %s%s%s\n' "${C_BOLD}" "$(L '安装向导 —— 一路回车即可使用默认配置' 'Installer — just press Enter to accept the defaults')" "${C_RESET}"
+    wizard_questions
+
+    printf '\n'
     check_dependencies
-    cleanup_legacy_subscription_https
-    
-    echo ""
 
-    # If already installed, only update the binary (do not touch config)
-    if has_existing_install; then
-        update_kernel_only
-        if [[ "${WARP_ENABLED}" == "true" ]]; then
-            if load_existing_config_context; then
-                setup_warp_egress
-                create_service
-                ensure_sudoku_core_ready
-            else
-                record_nonfatal_issue "SUDOKU_WARP=true was requested, but existing Sudoku config could not be loaded; WARP setup was skipped."
-            fi
-        fi
-        echo ""
-        if prepare_existing_install_output; then
-            print_results
-        else
-            echo -e "${CYAN}${BOLD}⚙️  Service Management:${NC}"
-            echo -e "  Status:  ${YELLOW}systemctl status ${SERVICE_NAME}${NC}"
-            echo -e "  Restart: ${YELLOW}systemctl restart ${SERVICE_NAME}${NC}"
-            echo -e "  Logs:    ${YELLOW}journalctl -u ${SERVICE_NAME} -f${NC}"
-            echo ""
-        fi
-        exit 0
+    local tag="${SUDOKU_VERSION}"
+    if [[ -z "${tag}" ]]; then
+        tag=$(get_latest_tag "${SUDOKU_REPO}") || die "$(L '无法获取 Sudoku 最新版本（GitHub 不可达？）' 'Could not resolve the latest Sudoku release (GitHub unreachable?)')"
     fi
+    ui_run "$(L "下载 Sudoku ${tag}" "Downloading Sudoku ${tag}")" install_sudoku_kernel "${tag}" || die "$(L '内核安装失败。' 'Kernel installation failed.')"
 
-    # Get latest version and download
-    VERSION=$(get_latest_version)
-    download_binary "$VERSION"
-    
-    # Generate keys and detect IP
-    generate_keypair
-    get_public_ip
-
+    generate_keypair || die "$(L '密钥生成失败。' 'Key generation failed.')"
     CUSTOM_TABLE=$(generate_xpv_table)
-    success "Custom X/P/V table: ${CUSTOM_TABLE}"
-    
-    echo ""
-    
-    # Setup
-    if ! setup_cf_fallback; then
-        record_nonfatal_issue "Cloudflare 500 fallback setup failed; continuing with Sudoku core deployment."
+
+    if [[ "${CF_FALLBACK_ENABLED}" == "true" ]]; then
+        CF_RESULT_FILE=$(mktemp)
+        ui_run "$(L '部署伪装回落页' 'Deploying camouflage fallback page')" setup_cf_fallback || true
+        if [[ -s "${CF_RESULT_FILE}" ]]; then SUDOKU_FALLBACK=$(<"${CF_RESULT_FILE}"); fi
+        rm -f "${CF_RESULT_FILE}"
+        CF_RESULT_FILE=""
     fi
-    setup_warp_egress
-    create_config
-    configure_firewall
-    create_service
-    ensure_sudoku_core_ready
-    
-    # Generate output
-    generate_short_link
-    generate_subscription_config
-    if ! persist_export_state; then
-        record_nonfatal_issue "Failed to save export state; generated exports are still available in this output."
+
+    ui_run "$(L '生成服务端配置' 'Writing server config')" create_config || die "$(L '配置校验失败。' 'Config validation failed.')"
+
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        remove_legacy_warp_tun_service
+        ui_run "$(L '安装 sudoku-sing-box 内核' 'Installing sudoku-sing-box')" install_sing_box_kernel || die "$(L 'sudoku-sing-box 安装失败。' 'sudoku-sing-box installation failed.')"
+        ui_run "$(L '注册 WARP 账户' 'Registering WARP account')" ensure_warp_profile || die "$(L 'WARP 注册失败。' 'WARP registration failed.')"
+        ui_run "$(L '生成 WARP 出口配置' 'Writing WARP egress config')" write_sing_box_warp_config || die "$(L 'WARP 配置失败。' 'WARP config failed.')"
     fi
-    
-    # Display results
+
+    if ! ui_run "$(L '启动服务' 'Starting service')" start_and_wait; then
+        "${JOURNALCTL}" -u "$(svc_name)" -n 20 --no-pager 2>/dev/null | sed 's/^/      /' >&2 || true
+        die "$(L '服务启动失败。' 'Service failed to start.')"
+    fi
+    configure_firewall "${SUDOKU_PORT}"
+
+    info "$(L '检测公网地址…' 'Detecting public address…')"
+    ensure_server_ip || die "$(L '缺少服务器地址，可设置 SERVER_IP 后重试。' 'No server address; set SERVER_IP and retry.')"
+    SHORT_LINK=$(make_short_link "${AVAILABLE_PRIVATE_KEY}") || die "$(L '分享链接生成失败。' 'Failed to generate share link.')"
+    generate_subscription_config >/dev/null 2>&1 || true
+    persist_export_state
+    mark_applied
+    ver_set INSTALLED_AT "$(date +%s)"
+    cleanup_legacy_subscription_https
+    ui_run "$(L '安装管理面板 sudoku-dash' 'Installing sudoku-dash')" install_dash_self || record_nonfatal_issue "$(L 'dash 安装失败，可重新运行安装命令。' 'dash install failed; re-run the installer to retry.')"
+
     print_results
 }
 
-main "$@"
+start_and_wait() {
+    create_service || return 1
+    wait_for_port "${SUDOKU_PORT}" 15
+}
+
+print_results() {
+    local mode_label
+    if [[ "${WARP_ENABLED}" == "true" ]]; then mode_label="WARP (sudoku-sing-box)"; else mode_label="$(L '直连' 'Direct')"; fi
+    printf '\n'
+    box_top "$(L 'Sudoku 已就绪' 'Sudoku is ready')"
+    box_row "$(printf '%s%s%s %s' "${C_DIM}" "$(pad_right "$(L '服务器' 'Server')" 10)" "${C_RESET}" "$(join_host_port "${SERVER_IP}" "${SUDOKU_PORT}")")"
+    box_row "$(printf '%s%s%s %s' "${C_DIM}" "$(pad_right "$(L '出口模式' 'Egress')" 10)" "${C_RESET}" "${mode_label}")"
+    box_row "$(printf '%s%s%s %s' "${C_DIM}" "$(pad_right "$(L '内核版本' 'Kernel')" 10)" "${C_RESET}" "$(ver_get SUDOKU_VERSION)")"
+    box_bottom
+    printf '\n  %s%s%s\n\n' "${C_BOLD}" "$(L '客户端分享链接（复制到客户端导入）:' 'Client share link (import into your client):')" "${C_RESET}"
+    printf '%s\n\n' "${SHORT_LINK}"
+    printf '  %s%s%s\n' "${C_OK}" "$(L '管理用户 / 用量 / 带宽 / 版本，随时运行:' 'Manage users / usage / bandwidth / versions any time with:')" "${C_RESET}"
+    printf '    %ssudo sudoku-dash%s\n' "${C_ACC}${C_BOLD}" "${C_RESET}"
+    if ((${#NONFATAL_ISSUES[@]} > 0)); then
+        printf '\n'
+        warn "$(L '以下问题不影响使用:' 'Non-fatal issues:')"
+        local issue
+        for issue in "${NONFATAL_ISSUES[@]}"; do printf '    - %s\n' "${issue}" >&2; done
+    fi
+    printf '\n'
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Upgrade / rollback
+# ═══════════════════════════════════════════════════════════════════════════════
+
+latest_backup_file() { # <binary-name>
+    ls -1t "${BACKUP_DIR}/${1}@"* 2>/dev/null | head -n 1
+}
+
+restore_backup() { # <binary-name> <version-key> [file]
+    local name="$1" vkey="$2" file="${3:-}" ver
+    [[ -n "${file}" ]] || file=$(latest_backup_file "${name}")
+    [[ -n "${file}" && -f "${file}" ]] || return 1
+    ver="${file##*/}"
+    ver="${ver#"${name}"@}"
+    ver="${ver%%@*}"
+    cp -p "${file}" "${INSTALL_DIR}/${name}.new" && mv -f "${INSTALL_DIR}/${name}.new" "${INSTALL_DIR}/${name}" || return 1
+    ver_set "${vkey}" "${ver}"
+}
+
+# upgrade_kernel <sudoku-tag> : download, migrate, restart; roll back automatically on failure.
+upgrade_kernel() {
+    local tag="$1" before
+    before=$(ver_get SUDOKU_VERSION)
+    ui_run "$(L "下载 Sudoku ${tag}" "Downloading Sudoku ${tag}")" install_sudoku_kernel "${tag}" || return 1
+    migrate_legacy_httpmask_config_inplace "${CONFIG_FILE}" || true
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        ui_run "$(L '更新 sudoku-sing-box' 'Updating sudoku-sing-box')" install_sing_box_kernel || warn "$(L 'sudoku-sing-box 更新失败，保留旧版本。' 'sudoku-sing-box update failed; keeping the old build.')"
+        sync_singbox_users "${CONFIG_FILE}" "${SING_BOX_CONFIG_FILE}" || true
+    fi
+    if ui_run "$(L '重启服务' 'Restarting service')" svc_restart; then
+        return 0
+    fi
+    err "$(L '新版本启动失败，正在回滚…' 'New version failed to start; rolling back…')"
+    if restore_backup sudoku SUDOKU_VERSION; then
+        svc_restart >/dev/null 2>&1 && ok "$(L "已回滚到 ${before:-旧版本}" "Rolled back to ${before:-the previous build}")"
+    fi
+    return 1
+}
+
+cmd_upgrade() {
+    detect_os; detect_arch; ensure_root "${ORIG_ARGS[@]}"
+    has_existing_install || die "$(L '未检测到已安装的 Sudoku。' 'Sudoku is not installed.')"
+    check_dependencies
+    ctx_load
+    local tag="${SUDOKU_VERSION}"
+    [[ -n "${tag}" ]] || tag=$(get_latest_tag "${SUDOKU_REPO}") || die "$(L '无法获取最新版本。' 'Could not resolve the latest release.')"
+    if [[ "$(ver_get SUDOKU_VERSION)" == "${tag}" ]]; then
+        ok "$(L "已是最新版本 ${tag}" "Already on ${tag}")"
+    else
+        upgrade_kernel "${tag}" || die "$(L '升级失败。' 'Upgrade failed.')"
+    fi
+    ui_run "$(L '更新 sudoku-dash' 'Updating sudoku-dash')" install_dash_self || true
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Uninstall
+# ═══════════════════════════════════════════════════════════════════════════════
+
+do_uninstall() { # <purge: 1|0>
+    local purge="$1" port
+    port=$(cfg_get .local_port)
+    if have_systemctl; then
+        local s
+        for s in "${SERVICE_NAME}" "${SING_BOX_SERVICE_NAME}" "${FALLBACK_SERVICE_NAME}"; do
+            "${SYSTEMCTL}" stop "${s}" >/dev/null 2>&1 || true
+            "${SYSTEMCTL}" disable "${s}" >/dev/null 2>&1 || true
+            rm -f "${SYSTEMD_DIR}/${s}.service"
+        done
+        cleanup_legacy_subscription_https
+        remove_legacy_warp_tun_service
+        "${SYSTEMCTL}" daemon-reload >/dev/null 2>&1 || true
+    fi
+    [[ -n "${port}" ]] && remove_firewall_rule "${port}"
+    rm -f "${INSTALL_DIR}/sudoku" "${INSTALL_DIR}/sudoku-sing-box"
+    if [[ -n "$(ver_get WGCF_INSTALLED)" ]]; then rm -f "${INSTALL_DIR}/wgcf"; fi
+    rm -rf "${FALLBACK_LIB_DIR}" "${SING_BOX_CACHE_DIR}"
+    rm -f "${SING_BOX_CONFIG_FILE}"
+    rmdir "${SING_BOX_CONFIG_DIR}" 2>/dev/null || true
+    if [[ "${purge}" == "1" ]]; then
+        rm -rf "${CONFIG_DIR}"
+    else
+        rm -rf "${BACKUP_DIR}"
+    fi
+    if [[ -L "${INSTALL_DIR}/dash" && "$(readlink "${INSTALL_DIR}/dash")" == "${DASH_BIN}" ]]; then
+        rm -f "${INSTALL_DIR}/dash"
+    fi
+    rm -f "${DASH_BIN}"
+}
+
+cmd_uninstall() {
+    detect_os; ensure_root "${ORIG_ARGS[@]}"
+    has_existing_install || { info "$(L 'Sudoku 未安装，无需卸载。' 'Sudoku is not installed; nothing to remove.')"; return 0; }
+    load_existing_config_context >/dev/null 2>&1 || true
+    local purge=1
+    if [[ "${UI_TTY}" == "1" && "${ASSUME_YES}" != "1" ]]; then
+        printf '\n'
+        ui_confirm "$(L '确认卸载 Sudoku？' 'Uninstall Sudoku?')" n || { info "$(L '已取消。' 'Cancelled.')"; return 0; }
+        ui_confirm "$(L '同时删除配置与密钥（客户端将无法再连接）？' 'Also delete config and keys (clients will stop working)?')" y || purge=0
+    fi
+    ui_run "$(L '卸载 Sudoku' 'Removing Sudoku')" do_uninstall "${purge}" || return 1
+    if [[ "${purge}" == "0" ]]; then
+        info "$(L "配置已保留在 ${CONFIG_DIR}" "Config kept in ${CONFIG_DIR}")"
+    fi
+    ok "$(L '卸载完成。' 'Uninstall complete.')"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# dash: context, process stats
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ctx_load() {
+    load_existing_config_context || return 1
+    USERS_CAP=""
+    return 0
+}
+
+CLK_TCK=$(getconf CLK_TCK 2>/dev/null || echo 100)
+[[ "${CLK_TCK}" =~ ^[0-9]+$ ]] || CLK_TCK=100
+
+proc_ticks() { # <pid> -> utime+stime ticks
+    [[ -r "/proc/${1}/stat" ]] || return 1
+    sed 's/^.*) //' "/proc/${1}/stat" | awk '{print $12 + $13}'
+}
+proc_rss() { awk '/^VmRSS:/ {print $2 * 1024}' "/proc/${1}/status" 2>/dev/null; }
+proc_threads() { awk '/^Threads:/ {print $2}' "/proc/${1}/status" 2>/dev/null; }
+proc_fds() { find "/proc/${1}/fd" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' '; }
+proc_uptime() { ps -o etimes= -p "${1}" 2>/dev/null | tr -d ' '; }
+
+conn_count() { # <port>
+    ss -H -tn "( sport = :${1} )" 2>/dev/null | awk '$1 == "ESTAB" {n++} END {print n + 0}'
+}
+
+# cpu_sample <pid> <seconds> -> percent with one decimal ("3.2"), or empty
+cpu_sample() {
+    local t1 t2 d pct10
+    t1=$(proc_ticks "$1") || return 1
+    sleep "$2"
+    t2=$(proc_ticks "$1") || return 1
+    d=$((t2 - t1))
+    pct10=$((d * 10000 / (CLK_TCK * ${3:-300})))
+    printf '%d.%d' $((pct10 / 10)) $((pct10 % 10))
+}
+
+sys_load_line() {
+    local load mem_total mem_avail
+    [[ -r /proc/loadavg ]] || return 0
+    load=$(awk '{print $1 " " $2 " " $3}' /proc/loadavg)
+    mem_total=$(awk '/^MemTotal:/ {print $2 * 1024}' /proc/meminfo)
+    mem_avail=$(awk '/^MemAvailable:/ {print $2 * 1024}' /proc/meminfo)
+    printf '%s: %s · %s %s / %s' "$(L '负载' 'load')" "${load}" "$(L '内存' 'mem')" \
+        "$(fmt_bytes $((mem_total - mem_avail)))" "$(fmt_bytes "${mem_total}")"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# User management (config.json `users` whitelist)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+USERS_CAP=""
+
+# sudoku_ver_ge_052 <tag>: does a "…sudoku.X.Y.Z…" tag include user control (≥0.5.2)?
+sudoku_ver_ge_052() {
+    local v
+    v=$(printf '%s' "$1" | sed -n 's/.*sudoku\.\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')
+    [[ -n "${v}" ]] || return 1
+    [[ "$(printf '%s\n0.5.2\n' "${v}" | sort -V | head -n 1)" == "0.5.2" ]]
+}
+
+users_capable() {
+    if [[ -n "${USERS_CAP}" ]]; then [[ "${USERS_CAP}" == "yes" ]]; return $?; fi
+    USERS_CAP="no"
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        sudoku_ver_ge_052 "$(ver_get SING_BOX_VERSION)" && USERS_CAP="yes"
+    elif [[ -x "${INSTALL_DIR}/sudoku" && -f "${CONFIG_FILE}" ]]; then
+        # A kernel with user control rejects an invalid user key; older kernels ignore the field.
+        local tmp out
+        tmp=$(mktemp)
+        if jq '.users = [{"key": "zz"}]' "${CONFIG_FILE}" >"${tmp}" 2>/dev/null; then
+            out=$("${INSTALL_DIR}/sudoku" -c "${tmp}" -test 2>&1) || true
+            if printf '%s' "${out}" | grep -q 'users\['; then USERS_CAP="yes"; fi
+        fi
+        rm -f "${tmp}"
+    fi
+    [[ "${USERS_CAP}" == "yes" ]]
+}
+
+users_count() { jq -r '(.users // []) | length' "${CONFIG_FILE}" 2>/dev/null || echo 0; }
+users_blocked_count() { jq -r '[(.users // [])[] | select(.blocked == true)] | length' "${CONFIG_FILE}" 2>/dev/null || echo 0; }
+user_field() { jq -r --argjson i "$1" ".users[\$i]${2} // empty" "${CONFIG_FILE}" 2>/dev/null; }
+
+cfg_edit() { # jq-args... : atomic edit of config.json, validated with `sudoku -test`, rolled back on failure
+    local tmp bak out
+    tmp=$(mktemp)
+    bak="${CONFIG_FILE}.bak"
+    if ! jq "$@" "${CONFIG_FILE}" >"${tmp}"; then
+        rm -f "${tmp}"
+        return 1
+    fi
+    cp -p "${CONFIG_FILE}" "${bak}"
+    chmod 600 "${tmp}"
+    mv "${tmp}" "${CONFIG_FILE}"
+    if ! out=$("${INSTALL_DIR}/sudoku" -c "${CONFIG_FILE}" -test 2>&1); then
+        printf '%s\n' "${out}" >&2
+        cp -p "${bak}" "${CONFIG_FILE}"
+        return 1
+    fi
+}
+
+USERS_CLEANUP='| if ((.users // []) | length) == 0 then del(.users) else . end'
+
+user_alias_exists() { jq -e --arg a "$1" '(.users // []) | map(.alias) | index($a) != null' "${CONFIG_FILE}" >/dev/null 2>&1; }
+user_key_exists() { jq -e --arg k "${1,,}" '(.users // []) | map((.key // "") | ascii_downcase) | index($k) != null' "${CONFIG_FILE}" >/dev/null 2>&1; }
+is_new_alias() {
+    is_alias "$1" || return 1
+    if user_alias_exists "$1"; then err "$(L '该用户名已存在。' 'That alias already exists.')"; return 1; fi
+}
+is_new_key() {
+    is_optional_hex_key "$1" || return 1
+    if [[ -n "$1" ]] && user_key_exists "$1"; then err "$(L '该密钥已被其他用户使用。' 'That key is already used by another user.')"; return 1; fi
+}
+
+# limits_json <down> <up> -> "null" or "[down,up]"
+limits_json() {
+    local d="${1:-0}" u="${2:-0}"
+    [[ -n "${d}" ]] || d=0
+    [[ -n "${u}" ]] || u=0
+    if [[ "${d}" == 0 && "${u}" == 0 ]]; then printf 'null'; else printf '[%s,%s]' "${d}" "${u}"; fi
+}
+
+users_apply() {
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        sync_singbox_users "${CONFIG_FILE}" "${SING_BOX_CONFIG_FILE}" || return 1
+        "${INSTALL_DIR}/sudoku-sing-box" check -c "${SING_BOX_CONFIG_FILE}" || return 1
+    fi
+    svc_restart
+}
+
+users_apply_prompt() {
+    if ui_confirm "$(L '立即应用？（会重启服务，现有连接将短暂中断）' 'Apply now? (restarts the service; live connections drop briefly)')" y; then
+        if ui_run "$(L '应用配置并重启' 'Applying config and restarting')" users_apply; then return 0; fi
+        warn "$(L '应用失败，配置已保存但服务可能仍在使用旧配置。' 'Apply failed; the config is saved but the service may still run the old one.')"
+    else
+        warn "$(L '已保存，稍后在主菜单重启生效。' 'Saved; restart from the main menu to take effect.')"
+    fi
+}
+
+# First user turns the whitelist on, which locks out every key not listed: keep the default key working.
+seed_default_user() {
+    [[ "$(users_count)" == "0" ]] || return 0
+    [[ -n "${AVAILABLE_PRIVATE_KEY}" ]] || return 0
+    cfg_edit --arg k "${AVAILABLE_PRIVATE_KEY}" '.users = [{alias: "default", key: $k}]' || return 1
+    info "$(L '已将安装时的默认密钥加入用户列表（alias: default），避免现有客户端被锁出。' 'Your install-time key was added as user "default" so existing clients keep working.')"
+}
+
+user_add() {
+    local alias key down up data bw
+    ui_clear; box_top "$(L '添加用户' 'Add user')"; box_row "$(L '每个用户拥有独立密钥，可单独限速 / 限流量 / 封禁。' 'Each user gets their own key with optional speed / data limits.')"; box_bottom
+    printf '\n'
+    ui_ask "$(L '用户名' 'Alias')" "" is_new_alias; alias="${ASK_RESULT}"
+    ui_ask "$(L '客户端密钥（留空自动生成）' 'Client key (empty = generate)')" "" is_new_key; key="${ASK_RESULT}"
+    ui_ask "$(L '下行限速 Mbps（0 = 不限）' 'Download limit Mbps (0 = unlimited)')" "0" is_nonneg_number; down="${ASK_RESULT}"
+    ui_ask "$(L '上行限速 Mbps（0 = 不限）' 'Upload limit Mbps (0 = unlimited)')" "0" is_nonneg_number; up="${ASK_RESULT}"
+    ui_ask "$(L '总流量上限 GB（0 = 不限）' 'Data quota GB (0 = unlimited)')" "0" is_nonneg_number; data="${ASK_RESULT}"
+    if [[ -z "${key}" ]]; then
+        key=$(generate_split_key) || { err "$(L '密钥生成失败。' 'Key generation failed.')"; return 1; }
+    fi
+    seed_default_user || { err "$(L '写入配置失败。' 'Failed to write config.')"; return 1; }
+    bw=$(limits_json "${down}" "${up}")
+    cfg_edit --arg alias "${alias}" --arg key "${key}" --argjson bw "${bw}" --argjson data "${data}" '
+        .users = ((.users // []) + [
+            {alias: $alias, key: $key}
+            + (if $bw then {bandwidth: $bw} else {} end)
+            + (if $data > 0 then {data: $data} else {} end)
+        ])' || { err "$(L '配置校验失败，已回滚。' 'Config validation failed; rolled back.')"; return 1; }
+    ok "$(L "已添加用户 ${alias}" "Added user ${alias}")"
+    users_apply_prompt
+    show_user_link "${key}" "${alias}"
+}
+
+user_edit_limits() { # <index>
+    local i="$1" down up data bw cur_d cur_u cur_data
+    cur_d=$(user_field "${i}" '.bandwidth[0]'); cur_u=$(user_field "${i}" '.bandwidth[1]'); cur_data=$(user_field "${i}" '.data')
+    printf '\n'
+    ui_ask "$(L '下行限速 Mbps（0 = 不限）' 'Download limit Mbps (0 = unlimited)')" "${cur_d:-0}" is_nonneg_number; down="${ASK_RESULT}"
+    ui_ask "$(L '上行限速 Mbps（0 = 不限）' 'Upload limit Mbps (0 = unlimited)')" "${cur_u:-0}" is_nonneg_number; up="${ASK_RESULT}"
+    ui_ask "$(L '总流量上限 GB（0 = 不限）' 'Data quota GB (0 = unlimited)')" "${cur_data:-0}" is_nonneg_number; data="${ASK_RESULT}"
+    bw=$(limits_json "${down}" "${up}")
+    cfg_edit --argjson i "${i}" --argjson bw "${bw}" --argjson data "${data}" "
+        .users[\$i] |= (del(.bandwidth, .data)
+            + (if \$bw then {bandwidth: \$bw} else {} end)
+            + (if \$data > 0 then {data: \$data} else {} end))" || { err "$(L '配置校验失败，已回滚。' 'Config validation failed; rolled back.')"; return 1; }
+    ok "$(L '限制已更新' 'Limits updated')"
+    users_apply_prompt
+}
+
+user_toggle_block() { # <index>
+    local i="$1"
+    cfg_edit --argjson i "${i}" '.users[$i] |= (if .blocked == true then del(.blocked) else . + {blocked: true} end)' \
+        || { err "$(L '配置校验失败，已回滚。' 'Config validation failed; rolled back.')"; return 1; }
+    ok "$(L '状态已切换' 'State toggled')"
+    users_apply_prompt
+}
+
+user_delete() { # <index>
+    local i="$1" alias remaining
+    alias=$(user_field "${i}" '.alias')
+    remaining=$(($(users_count) - 1))
+    if ((remaining == 0)); then
+        warn "$(L '这是最后一个用户：删除后用户白名单将关闭，任何有效密钥都能连接。' 'This is the last user: removing it turns the whitelist off and any valid key can connect again.')"
+    fi
+    ui_confirm "$(L "确认删除用户 ${alias}？" "Delete user ${alias}?")" n || return 0
+    cfg_edit --argjson i "${i}" "del(.users[\$i]) ${USERS_CLEANUP}" || { err "$(L '配置校验失败，已回滚。' 'Config validation failed; rolled back.')"; return 1; }
+    ok "$(L "已删除 ${alias}" "Deleted ${alias}")"
+    users_apply_prompt
+}
+
+# Per-user activity from the journal. The core does not export per-user byte counters, so we
+# report what it does log: session starts, plus quota/limit events.
+declare -A ACT_N=() ACT_LAST=() ACT_Q=()
+collect_activity() {
+    ACT_N=(); ACT_LAST=(); ACT_Q=()
+    have_systemctl || return 0
+    local alias n last q
+    while IFS=$'\t' read -r alias n last q; do
+        [[ -n "${alias}" ]] || continue
+        ACT_N["${alias}"]="${n}"; ACT_LAST["${alias}"]="${last}"; ACT_Q["${alias}"]="${q}"
+    done < <("${JOURNALCTL}" -u "$(svc_name)" --since "24 hours ago" -o short-iso --no-pager 2>/dev/null | awk '
+        {
+            if (match($0, /\[User:[^]]*\]/) == 0) next
+            a = substr($0, RSTART + 6, RLENGTH - 7)
+            low = tolower($0)
+            if (low ~ /session start/) n[a]++
+            if (low ~ /quota|exceed|limit/) q[a] = 1
+            last[a] = $1
+            seen[a] = 1
+        }
+        END { for (a in seen) printf "%s\t%d\t%s\t%d\n", a, n[a], last[a], q[a] }')
+}
+
+fmt_limits() { # down up data
+    local out=""
+    if [[ "${1:-0}" != 0 || "${2:-0}" != 0 ]]; then out="${G_DN}${1:-0}/${G_UP}${2:-0}M"; else out="∞"; fi
+    printf '%s' "${out}"
+}
+
+user_speed_text() { # down up
+    if [[ "${1:-0}" == 0 && "${2:-0}" == 0 ]]; then
+        L '不限速' 'unlimited'
+    else
+        printf '%s %s Mbps / %s %s Mbps' "${G_DN}" "${1:-0}" "${G_UP}" "${2:-0}"
+    fi
+}
+
+users_table() {
+    local i=0 alias key down up data blocked state lim quota sess hdr
+    printf -v hdr '%s %s %s %s %s %s %s' "$(pad_right '#' 2)" "$(pad_right "$(L '用户' 'User')" 14)" "$(pad_right 'Key' 9)" \
+        "$(pad_right "$(L '限速' 'Speed')" 12)" "$(pad_right "$(L '流量' 'Quota')" 7)" "$(pad_right "$(L '状态' 'State')" 8)" "$(L '24h会话' '24h')"
+    box_top "$(L '用户' 'Users')"
+    box_row "${C_DIM}${hdr}${C_RESET}"
+    box_sep
+    while IFS=$'\t' read -r alias key down up data blocked; do
+        [[ "${alias}" == "-" ]] && alias="${key:0:8}"
+        if [[ "${blocked}" == "true" ]]; then state="${C_ERR}$(L '已封禁' 'blocked')${C_RESET}"; else state="${C_OK}$(L '正常' 'active')${C_RESET}"; fi
+        lim=$(fmt_limits "${down}" "${up}")
+        if [[ "${data}" != 0 ]]; then quota="${data}G"; else quota="∞"; fi
+        sess="${ACT_N[${alias}]:-0}"
+        [[ "${ACT_Q[${alias}]:-0}" == "1" ]] && sess="${sess}${C_WARN}!${C_RESET}"
+        box_row "$(pad_right "$((i + 1))" 2) $(pad_right "${alias:0:14}" 14) $(pad_right "${key:0:8}" 9) $(pad_right "${lim}" 12) $(pad_right "${quota}" 7) $(pad_right "${state}" 8) ${sess}"
+        i=$((i + 1))
+    done < <(jq -r '(.users // [])[] | [(.alias // "-"), (.key // ""), (.bandwidth[0] // 0), (.bandwidth[1] // 0), (.data // 0), (.blocked // false)] | @tsv' "${CONFIG_FILE}")
+    box_bottom
+}
+
+user_detail() { # <index>
+    local i="$1" alias key blocked
+    while :; do
+        alias=$(user_field "${i}" '.alias'); key=$(user_field "${i}" '.key'); blocked=$(user_field "${i}" '.blocked')
+        [[ -n "${key}" ]] || return 0
+        ui_clear
+        box_top "$(L "用户: ${alias:-${key:0:8}}" "User: ${alias:-${key:0:8}}")"
+        kv "$(L '密钥' 'Key')" "${key:0:16}…"
+        kv "$(L '限速' 'Speed')" "$(user_speed_text "$(user_field "${i}" '.bandwidth[0]')" "$(user_field "${i}" '.bandwidth[1]')")"
+        kv "$(L '流量上限' 'Quota')" "$(user_field "${i}" '.data' | sed 's/^$/∞/') GB"
+        kv "$(L '状态' 'State')" "$([[ "${blocked}" == "true" ]] && L '已封禁' 'blocked' || L '正常' 'active')"
+        kv "$(L '24h 会话' 'Sessions 24h')" "${ACT_N[${alias}]:-0}"
+        kv "$(L '最近活动' 'Last seen')" "${ACT_LAST[${alias}]:--}"
+        box_bottom
+        dim "  $(L '提示: 内核不上报单用户字节数，这里仅展示会话统计。' 'Note: the core does not report per-user bytes; sessions are derived from logs.')"
+        printf '\n'
+        ui_menu "$(L '修改限速 / 流量' 'Edit limits / quota')" \
+            "$([[ "${blocked}" == "true" ]] && L '解除封禁' 'Unblock' || L '封禁' 'Block')" \
+            "$(L '分享链接' 'Share link')" "$(L '删除用户' 'Delete user')" "$(L '返回' 'Back')"
+        case "${MENU_SEL}" in
+            0) user_edit_limits "${i}"; ui_pause ;;
+            1) user_toggle_block "${i}"; ui_pause ;;
+            2) show_user_link "${key}" "${alias}" ;;
+            3) user_delete "${i}"; ui_pause; return 0 ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+users_screen() {
+    local n i
+    while :; do
+        collect_activity
+        ui_clear
+        if ! users_capable; then
+            box_top "$(L '用户管理' 'User management')"
+            box_row "$(L '当前内核不支持用户控制（Sudoku 需 ≥ 0.5.2）。' 'This kernel has no user control (needs Sudoku ≥ 0.5.2).')"
+            box_row "$(L '升级到支持版本，或启用 WARP 模式（自带支持）后再来。' 'Upgrade to a supporting build, or enable WARP mode (bundled sudoku-sing-box).')"
+            box_bottom
+            ui_pause
+            return 0
+        fi
+        n=$(users_count)
+        if ((n > 0)); then
+            users_table
+        else
+            box_top "$(L '用户' 'Users')"
+            box_row "$(L '尚未创建用户：当前所有持有效密钥的客户端都可连接。' 'No users yet: any client with a valid key can connect.')"
+            box_row "$(L '添加第一个用户后将启用白名单。' 'Adding the first user turns the whitelist on.')"
+            box_bottom
+        fi
+        if config_dirty; then warn "$(L '有未应用的更改（重启服务生效）。' 'Unapplied changes (restart to take effect).')"; fi
+        printf '\n'
+        if ((n > 0)); then
+            ui_menu "$(L '添加用户' 'Add user')" "$(L '查看 / 管理用户' 'Open a user')" "$(L '返回' 'Back')"
+            case "${MENU_SEL}" in
+                0) user_add; ui_pause ;;
+                1)
+                    local -a items=()
+                    for ((i = 0; i < n; i++)); do items+=("$((i + 1)). $(user_field "${i}" '.alias')"); done
+                    items+=("$(L '返回' 'Back')")
+                    ui_menu "${items[@]}"
+                    if ((MENU_SEL >= 0 && MENU_SEL < n)); then user_detail "${MENU_SEL}"; fi
+                    ;;
+                *) return 0 ;;
+            esac
+        else
+            ui_menu "$(L '添加用户' 'Add user')" "$(L '返回' 'Back')"
+            case "${MENU_SEL}" in
+                0) user_add; ui_pause ;;
+                *) return 0 ;;
+            esac
+        fi
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Share / connection info
+# ═══════════════════════════════════════════════════════════════════════════════
+
+render_node_yaml_for() { # <key> <name>
+    local saved_key="${AVAILABLE_PRIVATE_KEY}" saved_name="${SUBSCRIPTION_NODE_NAME}"
+    AVAILABLE_PRIVATE_KEY="$1"
+    SUBSCRIPTION_NODE_NAME="$2"
+    render_node_yaml
+    AVAILABLE_PRIVATE_KEY="${saved_key}"
+    SUBSCRIPTION_NODE_NAME="${saved_name}"
+}
+
+show_user_link() { # <key> <label>
+    local key="$1" label="${2:-sudoku}" link
+    if ! is_hex_key "${key}" || ((${#key} < 64)); then
+        warn "$(L '该用户只保存了密钥哈希，无法生成分享链接。' 'This user only has a key hash stored; a share link cannot be built.')"
+        ui_pause
+        return 0
+    fi
+    ensure_server_ip || { err "$(L '缺少服务器地址。' 'Missing server address.')"; ui_pause; return 1; }
+    link=$(make_short_link "${key}") || { err "$(L '分享链接生成失败。' 'Failed to generate share link.')"; ui_pause; return 1; }
+    ui_clear
+    box_top "$(L "分享: ${label}" "Share: ${label}")"
+    kv "$(L '服务器' 'Server')" "$(join_host_port "${SERVER_IP}" "${SUDOKU_PORT}")"
+    box_bottom
+    printf '\n  %s%s%s\n\n%s\n\n' "${C_BOLD}" "$(L '分享链接:' 'Share link:')" "${C_RESET}" "${link}"
+    if command -v qrencode >/dev/null 2>&1; then
+        qrencode -t ANSIUTF8 -m 1 "${link}" 2>/dev/null || true
+    fi
+    if ui_confirm "$(L '显示 Mihomo 节点 YAML？' 'Show the Mihomo node YAML?')" n; then
+        printf '\n'
+        render_node_yaml_for "${key}" "${label}" | sed 's/^/  /'
+    fi
+    ui_pause
+}
+
+share_screen() {
+    local n i
+    n=$(users_count)
+    if ((n == 0)); then
+        [[ -n "${AVAILABLE_PRIVATE_KEY}" ]] || { err "$(L '找不到默认密钥（export-state.env）。' 'Default key not found (export-state.env).')"; ui_pause; return 1; }
+        show_user_link "${AVAILABLE_PRIVATE_KEY}" "${SUBSCRIPTION_NODE_NAME}"
+        return 0
+    fi
+    ui_clear
+    box_top "$(L '选择要分享的用户' 'Choose a user to share')"
+    box_bottom
+    printf '\n'
+    local -a items=()
+    for ((i = 0; i < n; i++)); do items+=("$((i + 1)). $(user_field "${i}" '.alias')"); done
+    items+=("$(L '返回' 'Back')")
+    ui_menu "${items[@]}"
+    if ((MENU_SEL >= 0 && MENU_SEL < n)); then
+        show_user_link "$(user_field "${MENU_SEL}" '.key')" "$(user_field "${MENU_SEL}" '.alias')"
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Overview
+# ═══════════════════════════════════════════════════════════════════════════════
+
+kv() { box_row "$(printf '%s%s%s %s' "${C_DIM}" "$(pad_right "$1" 15)" "${C_RESET}" "$2")"; }
+
+render_overview() {
+    local pid="" up="" state line port cpu="" rss="" conns n nb
+    port=$(cfg_get .local_port)
+    if svc_is_active; then
+        pid=$(svc_pid || true)
+        [[ -n "${pid}" ]] && up=$(proc_uptime "${pid}")
+        line="${C_OK}${G_DOT} $(L '运行中' 'Running')${C_RESET}"
+        [[ -n "${pid}" ]] && line+="  ${C_DIM}pid ${pid}${up:+ · $(fmt_duration "${up}")}${C_RESET}"
+    else
+        line="${C_ERR}${G_RING} $(L '已停止' 'Stopped')${C_RESET}"
+    fi
+    box_top "Sudoku dash v${DASH_VERSION}"
+    kv "$(L '状态' 'Status')" "${line}"
+    kv "$(L '出口模式' 'Egress')" "$([[ "${WARP_ENABLED}" == "true" ]] && echo 'WARP (sudoku-sing-box)' || L '直连' 'Direct')"
+    kv "$(L '监听' 'Listen')" "$([[ -n "${SERVER_IP}" ]] && join_host_port "${SERVER_IP}" "${port}" || echo ":${port}")"
+    kv "$(L '内核' 'Kernel')" "sudoku $(ver_get SUDOKU_VERSION | sed 's/^$/?/')$([[ "${WARP_ENABLED}" == "true" ]] && printf ' · sing-box %s' "$(ver_get SING_BOX_VERSION | sed 's/^$/?/')")"
+    if [[ -n "${pid}" && -r "/proc/${pid}/stat" ]]; then
+        cpu=$(cpu_sample "${pid}" 0.3 300 || true)
+        rss=$(proc_rss "${pid}")
+        conns=$(conn_count "${port}")
+        kv "$(L '占用' 'Resources')" "CPU ${cpu:-?}% · $(L '内存' 'RAM') $(fmt_bytes "${rss:-0}") · $(L '连接' 'conns') ${conns:-0} · $(L '线程' 'thr') $(proc_threads "${pid}")"
+    fi
+    n=$(users_count); nb=$(users_blocked_count)
+    if ((n > 0)); then
+        line="${n}"
+        ((nb > 0)) && line+=" ($(L "${nb} 个已封禁" "${nb} blocked"))"
+        kv "$(L '用户' 'Users')" "${line}"
+    elif users_capable; then
+        kv "$(L '用户' 'Users')" "$(L '未启用白名单（任意有效密钥可连接）' 'whitelist off (any valid key connects)')"
+    else
+        kv "$(L '用户' 'Users')" "$(L '单密钥（内核不支持用户控制）' 'single key (kernel has no user control)')"
+    fi
+    line=$(sys_load_line)
+    [[ -n "${line}" ]] && kv "$(L '系统' 'System')" "${line}"
+    box_bottom
+    if config_dirty; then warn "$(L '配置已修改但尚未重启生效。' 'Config changed but not yet applied (restart needed).')"; fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Live monitor (aggregate rx/tx on the listening port, via ss)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+monitor_sample() { # <port> -> "peer tx rx" per established socket (server perspective)
+    ss -H -tin "( sport = :${1} )" 2>/dev/null | awk '
+        /^[A-Za-z]/ { peer = ($1 == "ESTAB") ? $5 : ""; next }
+        {
+            tx = ""; rx = ""
+            for (i = 1; i <= NF; i++) {
+                if ($i ~ /^bytes_acked:/) { split($i, a, ":"); tx = a[2] }
+                if ($i ~ /^bytes_received:/) { split($i, b, ":"); rx = b[2] }
+            }
+            if (peer != "") print peer, tx + 0, rx + 0
+            peer = ""
+        }'
+}
+
+spark() {
+    local max=1 v out="" idx
+    for v in "$@"; do ((v > max)) && max="${v}"; done
+    for v in "$@"; do
+        idx=$((v * 7 / max))
+        out+="${SPARK[idx]}"
+    done
+    printf '%s' "${out}"
+}
+
+# Frame data comes in through MON_* globals.
+monitor_frame() {
+    local lbl_rx lbl_tx
+    box_top "$(L '实时带宽' 'Live bandwidth') · $(svc_name)"
+    box_row "$(printf '%s RX %s%-14s%s %s' "${C_OK}${G_DN}${C_RESET}" "${C_BOLD}" "$(fmt_rate "${MON_RATE_RX}")" "${C_RESET}" "${C_OK}$(spark "${MON_H_RX[@]}")${C_RESET}")"
+    box_row "$(printf '%s TX %s%-14s%s %s' "${C_ACC}${G_UP}${C_RESET}" "${C_BOLD}" "$(fmt_rate "${MON_RATE_TX}")" "${C_RESET}" "${C_ACC}$(spark "${MON_H_TX[@]}")${C_RESET}")"
+    box_row "${C_DIM}$(printf '%-14s %-14s' "$(fmt_mbps "${MON_RATE_RX}")" "$(fmt_mbps "${MON_RATE_TX}")")${C_RESET}"
+    box_sep
+    lbl_rx=$(fmt_bytes "${MON_TOT_RX}"); lbl_tx=$(fmt_bytes "${MON_TOT_TX}")
+    kv "$(L '本次累计' 'Session total')" "RX ${lbl_rx} · TX ${lbl_tx}"
+    kv "$(L '峰值' 'Peak')" "RX $(fmt_rate "${MON_PEAK_RX}") · TX $(fmt_rate "${MON_PEAK_TX}")"
+    kv "$(L '占用' 'Process')" "CPU ${MON_CPU:-?}% · $(L '内存' 'RAM') $(fmt_bytes "${MON_RSS:-0}") · $(L '连接' 'conns') ${MON_CONNS} · FD ${MON_FDS:-?}"
+    box_sep
+    if [[ -n "${MON_TOP}" ]]; then
+        local row_ip row_rx row_tx
+        while read -r _ row_ip row_rx row_tx; do
+            box_row "$(printf '%s %s %s' "$(pad_right "${row_ip}" 30)" "$(pad_right "${G_DN}$(fmt_rate "${row_rx}")" 17)" "${G_UP}$(fmt_rate "${row_tx}")")"
+        done <<<"${MON_TOP}"
+    else
+        box_row "${C_DIM}$(L '暂无活动连接' 'No active connections')${C_RESET}"
+    fi
+    box_bottom
+    printf '  %s%s%s\n' "${C_DIM}" "$(L 'RX = 客户端 → 服务器 · TX = 服务器 → 客户端 · q 返回' 'RX = clients → server · TX = server → clients · q to go back')" "${C_RESET}"
+}
+
+monitor_live() {
+    if [[ "${UI_TTY}" != "1" ]]; then err "$(L '实时监控需要交互终端。' 'The live monitor needs an interactive terminal.')"; return 1; fi
+    command -v ss >/dev/null 2>&1 || { err "$(L '需要 ss 命令（iproute2）。' 'The ss command (iproute2) is required.')"; ui_pause; return 1; }
+    svc_is_active || { warn "$(L '服务未运行。' 'Service is not running.')"; ui_pause; return 0; }
+
+    local port pid key peer tx rx d ip now_ms last_ms dt_ms t1 t2 first=1 frame line
+    local rate_rx=0 rate_tx=0 drx dtx
+    declare -A prev_tx=() prev_rx=() cur_tx=() cur_rx=() ip_rx=() ip_tx=()
+    port=$(cfg_get .local_port)
+    pid=$(svc_pid || true)
+    MON_H_RX=(); MON_H_TX=(); MON_TOT_RX=0; MON_TOT_TX=0; MON_PEAK_RX=0; MON_PEAK_TX=0
+    MON_RATE_RX=0; MON_RATE_TX=0; MON_CPU=""; MON_RSS=0; MON_CONNS=0; MON_FDS=""; MON_TOP=""
+
+    ui_clear
+    ui_cursor_hide
+    last_ms=$(date +%s%3N 2>/dev/null || echo 0)
+    [[ "${last_ms}" =~ ^[0-9]+$ ]] || last_ms=0
+    t1=$(proc_ticks "${pid}" 2>/dev/null || echo 0)
+    while :; do
+        now_ms=$(date +%s%3N 2>/dev/null || echo 0)
+        [[ "${now_ms}" =~ ^[0-9]+$ ]] || now_ms=0
+        dt_ms=$((now_ms - last_ms))
+        ((dt_ms < 200)) && dt_ms=1000
+        last_ms="${now_ms}"
+
+        cur_tx=(); cur_rx=(); ip_rx=(); ip_tx=()
+        drx=0; dtx=0
+        while read -r peer tx rx; do
+            [[ -n "${peer}" ]] || continue
+            cur_tx["${peer}"]="${tx}"; cur_rx["${peer}"]="${rx}"
+            if [[ -n "${prev_tx[${peer}]+x}" ]]; then
+                d=$((tx - prev_tx[${peer}])); ((d < 0)) && d="${tx}"
+                dtx=$((dtx + d)); ip="${peer%:*}"; ip_tx["${ip}"]=$((${ip_tx[${ip}]:-0} + d))
+                d=$((rx - prev_rx[${peer}])); ((d < 0)) && d="${rx}"
+                drx=$((drx + d)); ip_rx["${ip}"]=$((${ip_rx[${ip}]:-0} + d))
+            elif ((first == 0)); then
+                ip="${peer%:*}"
+                dtx=$((dtx + tx)); ip_tx["${ip}"]=$((${ip_tx[${ip}]:-0} + tx))
+                drx=$((drx + rx)); ip_rx["${ip}"]=$((${ip_rx[${ip}]:-0} + rx))
+            fi
+        done < <(monitor_sample "${port}")
+        prev_tx=(); prev_rx=()
+        for key in "${!cur_tx[@]}"; do prev_tx["${key}"]="${cur_tx[${key}]}"; prev_rx["${key}"]="${cur_rx[${key}]}"; done
+        first=0
+
+        rate_rx=$((drx * 1000 / dt_ms)); rate_tx=$((dtx * 1000 / dt_ms))
+        MON_TOT_RX=$((MON_TOT_RX + drx)); MON_TOT_TX=$((MON_TOT_TX + dtx))
+        ((rate_rx > MON_PEAK_RX)) && MON_PEAK_RX="${rate_rx}"
+        ((rate_tx > MON_PEAK_TX)) && MON_PEAK_TX="${rate_tx}"
+        MON_RATE_RX="${rate_rx}"; MON_RATE_TX="${rate_tx}"
+        MON_H_RX+=("${rate_rx}"); MON_H_TX+=("${rate_tx}")
+        if ((${#MON_H_RX[@]} > 36)); then MON_H_RX=("${MON_H_RX[@]: -36}"); MON_H_TX=("${MON_H_TX[@]: -36}"); fi
+        MON_CONNS="${#cur_rx[@]}"
+
+        MON_TOP=""
+        for ip in "${!ip_rx[@]}"; do
+            MON_TOP+="$((${ip_rx[${ip}]:-0} + ${ip_tx[${ip}]:-0})) ${ip} $((${ip_rx[${ip}]:-0} * 1000 / dt_ms)) $((${ip_tx[${ip}]:-0} * 1000 / dt_ms))"$'\n'
+        done
+        MON_TOP=$(printf '%s' "${MON_TOP}" | sort -rn | head -n 5)
+
+        if [[ -n "${pid}" && -r "/proc/${pid}/stat" ]]; then
+            t2=$(proc_ticks "${pid}" || echo "${t1}")
+            MON_CPU=$(awk -v d=$((t2 - t1)) -v c="${CLK_TCK}" -v ms="${dt_ms}" 'BEGIN {printf "%.1f", d * 100000 / (c * ms)}')
+            t1="${t2}"
+            MON_RSS=$(proc_rss "${pid}"); MON_FDS=$(proc_fds "${pid}")
+        fi
+
+        frame=$(monitor_frame)
+        printf '\033[H'
+        while IFS= read -r line; do printf '%s\033[K\n' "${line}"; done <<<"${frame}"
+        printf '\033[J'
+
+        key=""
+        IFS= read -rsn1 -t 1 key || true
+        case "${key}" in q|Q|$'\033') break ;; esac
+    done
+    ui_cursor_show
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Versions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+rollback_screen() {
+    local -a files=() items=() ts
+    local f name ver
+    while IFS= read -r f; do files+=("${f}"); done < <(ls -1t "${BACKUP_DIR}/sudoku@"* 2>/dev/null)
+    if ((${#files[@]} == 0)); then
+        warn "$(L '没有可回滚的备份。' 'No backups to roll back to.')"
+        ui_pause
+        return 0
+    fi
+    for f in "${files[@]}"; do
+        name="${f##*/}"; ver="${name#sudoku@}"; ver="${ver%%@*}"
+        ts="${name##*@}"
+        items+=("${ver}  ${C_DIM}${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:8:2}:${ts:10:2}${C_RESET}")
+    done
+    items+=("$(L '返回' 'Back')")
+    ui_clear; box_top "$(L '回滚到备份版本' 'Roll back to a backup')"; box_bottom; printf '\n'
+    ui_menu "${items[@]}"
+    ((MENU_SEL >= 0 && MENU_SEL < ${#files[@]})) || return 0
+    f="${files[MENU_SEL]}"
+    ui_confirm "$(L '确认回滚？' 'Roll back?')" y || return 0
+    if restore_backup sudoku SUDOKU_VERSION "${f}"; then
+        ui_run "$(L '重启服务' 'Restarting service')" svc_restart || true
+    else
+        err "$(L '回滚失败。' 'Rollback failed.')"
+    fi
+    ui_pause
+}
+
+pick_version_screen() {
+    local -a tags=() items=()
+    local line tag pre date
+    info "$(L '获取版本列表…' 'Fetching releases…')"
+    while IFS='|' read -r tag pre date; do
+        [[ -n "${tag}" ]] || continue
+        tags+=("${tag}")
+        items+=("${tag}  ${C_DIM}${date}$([[ "${pre}" == "true" ]] && echo ' · pre-release')${C_RESET}")
+    done < <(list_release_tags "${SUDOKU_REPO}" 10 2>/dev/null)
+    if ((${#tags[@]} == 0)); then
+        err "$(L '无法获取版本列表。' 'Could not fetch the release list.')"
+        ui_pause
+        return 1
+    fi
+    items+=("$(L '返回' 'Back')")
+    ui_clear; box_top "$(L '选择 Sudoku 版本' 'Pick a Sudoku version')"; box_bottom; printf '\n'
+    ui_menu "${items[@]}"
+    ((MENU_SEL >= 0 && MENU_SEL < ${#tags[@]})) || return 0
+    tag="${tags[MENU_SEL]}"
+    ui_confirm "$(L "切换到 ${tag}？（会重启服务）" "Switch to ${tag}? (restarts the service)")" y || return 0
+    if upgrade_kernel "${tag}"; then USERS_CAP=""; fi
+    ui_pause
+}
+
+versions_screen() {
+    local cur latest dash_remote
+    while :; do
+        ui_clear
+        info "$(L '检查更新…' 'Checking for updates…')"
+        cur=$(ver_get SUDOKU_VERSION)
+        latest=$(get_latest_tag "${SUDOKU_REPO}" || true)
+        dash_remote=$(remote_dash_version || true)
+        ui_clear
+        box_top "$(L '版本管理' 'Versions')"
+        kv "Sudoku" "${cur:-$(L '未知（由旧脚本安装）' 'unknown (installed by an older script)')}"
+        kv "$(L '最新 release' 'Latest release')" "${latest:-$(L '获取失败' 'unavailable')}$([[ -n "${latest}" && "${latest}" != "${cur}" ]] && printf '  %s%s%s' "${C_WARN}" "$(L '← 可升级' '← update available')" "${C_RESET}")"
+        if [[ "${WARP_ENABLED}" == "true" ]]; then kv "sing-box" "$(ver_get SING_BOX_VERSION)"; fi
+        kv "$(L '用户控制' 'User control')" "$(users_capable && L '支持' 'supported' || L '当前内核不支持（需 ≥ 0.5.2）' 'not in this build (needs ≥ 0.5.2)')"
+        kv "dash" "v${DASH_VERSION}$([[ -n "${dash_remote}" && "${dash_remote}" != "${DASH_VERSION}" ]] && printf '  %s→ v%s%s' "${C_WARN}" "${dash_remote}" "${C_RESET}")"
+        box_bottom
+        printf '\n'
+        ui_menu "$(L '升级到最新 release' 'Upgrade to latest release')" "$(L '安装指定版本 / 预发布' 'Install a specific version / pre-release')" \
+            "$(L '回滚到备份' 'Roll back to a backup')" "$(L '更新 dash 自身' 'Update dash itself')" "$(L '返回' 'Back')"
+        case "${MENU_SEL}" in
+            0)
+                if [[ -z "${latest}" ]]; then err "$(L '无法获取最新版本。' 'Could not resolve latest release.')"
+                elif [[ "${latest}" == "${cur}" ]]; then ok "$(L '已是最新版本。' 'Already up to date.')"
+                else upgrade_kernel "${latest}" && USERS_CAP=""; fi
+                ui_pause ;;
+            1) pick_version_screen ;;
+            2) rollback_screen ;;
+            3)
+                if [[ -z "${dash_remote}" ]]; then err "$(L '无法获取 dash 更新。' 'Could not fetch the dash update.')"
+                elif [[ "${dash_remote}" == "${DASH_VERSION}" ]]; then ok "$(L 'dash 已是最新。' 'dash is up to date.')"
+                elif ui_run "$(L '更新 dash' 'Updating dash')" install_dash_self; then
+                    ok "$(L '已更新，重新启动…' 'Updated; restarting…')"; sleep 1
+                    exec "${DASH_BIN}" dash
+                fi
+                ui_pause ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Service & settings
+# ═══════════════════════════════════════════════════════════════════════════════
+
+service_screen() {
+    local svc
+    while :; do
+        svc=$(svc_name)
+        ui_clear
+        box_top "$(L '服务控制' 'Service')"
+        kv "$(L '服务' 'Unit')" "${svc}"
+        kv "$(L '状态' 'State')" "$(svc_is_active && L '运行中' 'running' || L '已停止' 'stopped')"
+        box_bottom
+        printf '\n'
+        ui_menu "$(L '重启' 'Restart')" "$(svc_is_active && L '停止' 'Stop' || L '启动' 'Start')" "$(L '最近日志' 'Recent logs')" "$(L '跟随日志（Ctrl-C 退出）' 'Follow logs (Ctrl-C to exit)')" "$(L '返回' 'Back')"
+        case "${MENU_SEL}" in
+            0) ui_run "$(L '重启服务' 'Restarting')" svc_restart || true; ui_pause ;;
+            1)
+                if svc_is_active; then ui_run "$(L '停止服务' 'Stopping')" "${SYSTEMCTL}" stop "${svc}" || true
+                else ui_run "$(L '启动服务' 'Starting')" "${SYSTEMCTL}" start "${svc}" || true; fi
+                ui_pause ;;
+            2) printf '\n'; "${JOURNALCTL}" -u "${svc}" -n 40 --no-pager 2>&1 | cut -c1-150 || true; ui_pause ;;
+            3)
+                printf '\n'
+                trap ':' INT
+                "${JOURNALCTL}" -u "${svc}" -n 20 -f --no-pager 2>&1 | cut -c1-150 || true
+                trap 'ui_cursor_show; printf "\n"; exit 130' INT
+                ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+change_port() {
+    local old="${SUDOKU_PORT}" new
+    CURRENT_PORT_FOR_VALIDATION="${old}"
+    printf '\n'
+    ui_ask "$(L '新端口' 'New port')" "${old}" is_free_port
+    new="${ASK_RESULT}"
+    [[ "${new}" != "${old}" ]] || return 0
+    cfg_edit --argjson p "${new}" '.local_port = $p' || { err "$(L '配置校验失败。' 'Config validation failed.')"; return 1; }
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        local tmp
+        tmp=$(mktemp)
+        jq --argjson p "${new}" '.inbounds |= map(if .tag == "sudoku-in" then .listen_port = $p else . end)' "${SING_BOX_CONFIG_FILE}" >"${tmp}" \
+            && chmod 600 "${tmp}" && mv "${tmp}" "${SING_BOX_CONFIG_FILE}"
+    fi
+    remove_firewall_rule "${old}"
+    configure_firewall "${new}"
+    SUDOKU_PORT="${new}"
+    ui_run "$(L '重启服务' 'Restarting')" svc_restart || { err "$(L '服务启动失败，请检查日志。' 'Service failed to start; check the logs.')"; return 1; }
+    if [[ -n "${AVAILABLE_PRIVATE_KEY}" ]] && ensure_server_ip; then
+        SHORT_LINK=$(make_short_link "${AVAILABLE_PRIVATE_KEY}" 2>/dev/null || true)
+        persist_export_state
+    fi
+    warn "$(L '端口已变更：所有客户端需要使用新的分享链接。' 'Port changed: every client needs a fresh share link.')"
+}
+
+toggle_warp() {
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        ui_confirm "$(L '关闭 WARP，改为直连出站？' 'Disable WARP and egress directly?')" y || return 0
+        WARP_ENABLED="false"
+        ui_run "$(L '切换为直连并重启' 'Switching to direct mode')" start_and_wait || { err "$(L '启动失败。' 'Failed to start.')"; WARP_ENABLED="true"; return 1; }
+    else
+        ui_confirm "$(L '启用 Cloudflare WARP 出口？' 'Enable Cloudflare WARP egress?')" y || return 0
+        ui_run "$(L '安装 sudoku-sing-box 内核' 'Installing sudoku-sing-box')" install_sing_box_kernel || return 1
+        ui_run "$(L '注册 WARP 账户' 'Registering WARP account')" ensure_warp_profile || return 1
+        remove_legacy_warp_tun_service
+        ui_run "$(L '生成 WARP 出口配置' 'Writing WARP egress config')" write_sing_box_warp_config || return 1
+        WARP_ENABLED="true"
+        ui_run "$(L '切换为 WARP 并重启' 'Switching to WARP mode')" start_and_wait || { err "$(L '启动失败。' 'Failed to start.')"; WARP_ENABLED="false"; create_service >/dev/null 2>&1; return 1; }
+    fi
+    mark_applied
+    USERS_CAP=""
+}
+
+settings_screen() {
+    while :; do
+        ui_clear
+        box_top "$(L '设置' 'Settings')"
+        kv "$(L '端口' 'Port')" "${SUDOKU_PORT}"
+        kv "WARP" "$([[ "${WARP_ENABLED}" == "true" ]] && L '已启用' 'enabled' || L '未启用' 'disabled')"
+        kv "$(L '公网地址' 'Public host')" "${SERVER_IP:-$(L '自动检测' 'auto-detect')}"
+        box_bottom
+        printf '\n'
+        ui_menu "$(L '修改端口' 'Change port')" "$([[ "${WARP_ENABLED}" == "true" ]] && L '关闭 WARP' 'Disable WARP' || L '启用 WARP' 'Enable WARP')" \
+            "$(L '修改公网地址 / 域名' 'Change public host / domain')" "$(L '返回' 'Back')"
+        case "${MENU_SEL}" in
+            0) change_port; ui_pause ;;
+            1) toggle_warp; ui_pause ;;
+            2)
+                printf '\n'
+                ui_ask "$(L '服务器公网 IP 或域名' 'Server public IP or domain')" "${SERVER_IP}" is_alias
+                SERVER_IP="${ASK_RESULT}"
+                persist_export_state
+                ok "$(L '已保存。' 'Saved.')"
+                ui_pause ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Dash main loop, status, CLI
+# ═══════════════════════════════════════════════════════════════════════════════
+
+dash_main() {
+    detect_os
+    detect_arch
+    ensure_root "${ORIG_ARGS[@]}"
+    ctx_load || die "$(L '读取配置失败。' 'Failed to read the config.')"
+    check_dependencies
+    if [[ "${UI_TTY}" != "1" ]]; then cmd_status; return 0; fi
+
+    local act
+    while :; do
+        ui_clear
+        render_overview
+        printf '\n'
+        ui_menu "$(L '实时带宽 / 资源监控' 'Live bandwidth & resources')" "$(L '用户管理' 'Users')" "$(L '分享 / 连接信息' 'Share / connection info')" \
+            "$(L '版本管理' 'Versions & updates')" "$(L '服务控制' 'Service control')" "$(L '设置（端口 / WARP）' 'Settings (port / WARP)')" \
+            "$(L '卸载' 'Uninstall')" "$(L '退出' 'Quit')"
+        act="${MENU_SEL}"
+        case "${act}" in
+            0) monitor_live ;;
+            1) users_screen ;;
+            2) share_screen ;;
+            3) versions_screen ;;
+            4) service_screen ;;
+            5) settings_screen ;;
+            6)
+                cmd_uninstall
+                if ! has_existing_install; then ui_pause; return 0; fi
+                ui_pause ;;
+            *) printf '\n'; return 0 ;;
+        esac
+    done
+}
+
+cmd_status() {
+    ctx_load || { echo "not installed"; return 1; }
+    local port pid
+    port=$(cfg_get .local_port)
+    printf 'service:  %s (%s)\n' "$(svc_name)" "$(svc_is_active && echo running || echo stopped)"
+    printf 'mode:     %s\n' "$([[ "${WARP_ENABLED}" == "true" ]] && echo warp || echo direct)"
+    printf 'port:     %s\n' "${port}"
+    printf 'kernel:   %s\n' "$(ver_get SUDOKU_VERSION)"
+    printf 'users:    %s\n' "$(users_count)"
+    pid=$(svc_pid 2>/dev/null || true)
+    if [[ -n "${pid}" ]]; then
+        printf 'pid:      %s\n' "${pid}"
+        [[ -r "/proc/${pid}/status" ]] && printf 'rss:      %s\n' "$(fmt_bytes "$(proc_rss "${pid}")")"
+    fi
+    return 0
+}
+
+usage() {
+    cat <<EOF
+sudoku-dash ${DASH_VERSION}
+
+Usage: sudoku-dash [command]
+
+  (none)        open the dash TUI (or run the installer when Sudoku is not installed)
+  install       run the installer
+  dash          open the dash TUI
+  status        print a plain-text status summary
+  --upgrade     upgrade Sudoku (and dash) to the latest release
+  --uninstall   remove Sudoku
+  --version     print the dash version
+  --help        show this help
+
+Environment variables are documented at the top of this script and in the README.
+EOF
+}
+
+ORIG_ARGS=("$@")
+
+main() {
+    trap 'ui_cursor_show' EXIT
+    trap 'ui_cursor_show; printf "\n"; exit 130' INT
+    case "${1:-}" in
+        -h|--help|help) usage ;;
+        -v|--version|version) echo "sudoku-dash ${DASH_VERSION}" ;;
+        status) detect_os; cmd_status ;;
+        --upgrade|upgrade|update) cmd_upgrade ;;
+        --uninstall|uninstall) cmd_uninstall ;;
+        install)
+            if has_existing_install; then dash_main; else run_install; fi ;;
+        dash|"")
+            if has_existing_install; then dash_main; else run_install; fi ;;
+        *) usage >&2; exit 2 ;;
+    esac
+}
+
+if [[ "${SUDOKU_DASH_SOURCE_ONLY:-}" != "1" ]]; then
+    main "$@"
+fi
