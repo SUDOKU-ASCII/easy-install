@@ -1,6 +1,0 @@
-name = "sudoku-cf-worker"
-main = "src/index.mjs"
-compatibility_date = "2026-01-20"
-
-[observability]
-enabled = true
