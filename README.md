@@ -12,10 +12,10 @@
 在 Linux 服务器（systemd，amd64 / arm64）上以 root 运行：
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh -o /tmp/sudoku-dash.sh && sudo bash /tmp/sudoku-dash.sh
 ```
 
-全程只需回车两次：**端口**（默认随机）→ **是否启用 WARP**（默认否）。装完会直接给出 `sudoku://` 分享链接。
+全程只需一路回车：**端口**（默认随机）→ **AEAD 加密方式**（默认 `chacha20-poly1305`）→ **ASCII 模式**（默认 `up_ascii_down_entropy`）→ **是否启用 WARP**（默认否）。其余（自定义表 `custom_table` 自动随机生成、packed 下行、HTTP Mask `auto` + 随机路径前缀、CF 风格回落页）都用默认值，不会提问。装完会直接给出 `sudoku://` 分享链接。
 
 安装后脚本会变成常驻的管理面板 **`sudoku-dash`**，随时启动：
 
@@ -35,11 +35,13 @@ sudo sudoku-dash
 
 ### 环境变量
 
-全部可选，写在命令前即可，例如 `sudo SUDOKU_PORT=8443 SUDOKU_WARP=true bash -c "$(curl …)"`。设置了某项，向导就不会再问它。
+全部可选，写在命令前即可，例如 `sudo SUDOKU_PORT=8443 SUDOKU_WARP=true bash /tmp/sudoku-dash.sh`。设置了某项，向导就不会再问它。
 
 | 变量 | 默认值 | 含义 |
 | --- | --- | --- |
 | `SUDOKU_PORT` | 随机 50001-65535 | 服务端监听端口（**自定义端口**用它） |
+| `SUDOKU_AEAD` | `chacha20-poly1305` | 加密方式：`chacha20-poly1305` / `aes-128-gcm` / `none` |
+| `SUDOKU_ASCII` | `up_ascii_down_entropy` | ASCII 模式：`up_ascii_down_entropy` / `prefer_entropy` / `prefer_ascii` / `up_entropy_down_ascii` |
 | `SUDOKU_WARP` | `false` | `true` = 所有代理流量经 Cloudflare WARP 出站（隐藏 VPS 出口 IP、解锁地区限制）。会改用 [sudoku-sing-box](https://github.com/SUDOKU-ASCII/sudoku-sing-box) 内核，旧名 `SUDOKU_WARP_GOOGLE` 仍可用 |
 | `SUDOKU_VERSION` | 最新 release | 指定安装的 Sudoku 版本 tag，如 `v0.5.1` |
 | `SERVER_IP` | 自动检测 | 写入分享链接的公网 IP 或域名 |
@@ -64,7 +66,7 @@ sudo sudoku-dash
 
 ```bash
 # 安装时
-sudo SUDOKU_PORT=8443 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh -o /tmp/sudoku-dash.sh && sudo SUDOKU_PORT=8443 bash /tmp/sudoku-dash.sh
 # 安装后：sudo sudoku-dash → 设置 → 修改端口（自动更新防火墙与服务；客户端需换用新链接）
 ```
 
@@ -72,7 +74,7 @@ sudo SUDOKU_PORT=8443 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SU
 
 ```bash
 # 安装时直接启用
-sudo SUDOKU_WARP=true bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh -o /tmp/sudoku-dash.sh && sudo SUDOKU_WARP=true bash /tmp/sudoku-dash.sh
 # 安装后随时开关：sudo sudoku-dash → 设置 → 启用 / 关闭 WARP
 ```
 
@@ -93,7 +95,8 @@ sudo sudoku-dash --upgrade
 # 卸载（交互式会询问是否同时删除配置与密钥）：
 sudo sudoku-dash --uninstall
 # 脚本不在本机时：
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)" _ --uninstall
+curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh -o /tmp/sudoku-dash.sh
+sudo bash /tmp/sudoku-dash.sh --uninstall
 ```
 
 其它命令：`sudoku-dash status`（纯文本状态）、`sudoku-dash --help`。
@@ -105,10 +108,10 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-i
 | 项目 | 默认值 |
 | --- | --- |
 | 端口 | 随机 50001-65535 |
-| 模式 | `up_ascii_down_entropy` |
-| AEAD | `chacha20-poly1305` |
+| ASCII 模式 | `up_ascii_down_entropy`（可选） |
+| AEAD | `chacha20-poly1305`（可选） |
 | 自定义表 `custom_table` | 每次安装随机生成（X / P / V 排列） |
-| 纯下行 `enable_pure_downlink` | `false` |
+| 下行 | packed（`enable_pure_downlink: false`） |
 | Padding | 服务端 2–7 |
 | HTTP Mask | 启用 · `auto` · multiplex `on` · 随机路径前缀（客户端导出为 `httpmask.disable: true`） |
 | WARP | `false` |
@@ -136,10 +139,10 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-i
 Run as root on a Linux server (systemd, amd64 / arm64):
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh -o /tmp/sudoku-dash.sh && sudo bash /tmp/sudoku-dash.sh
 ```
 
-Two Enters and you are done: **port** (default: random) → **enable WARP** (default: no). You get a `sudoku://` share link right away.
+Just keep pressing Enter: **port** (default: random) → **AEAD** (default `chacha20-poly1305`) → **ASCII mode** (default `up_ascii_down_entropy`) → **enable WARP** (default: no). Everything else (random `custom_table`, packed downlink, HTTP mask `auto` + random path root, CF-style fallback page) uses defaults and is never asked. You get a `sudoku://` share link right away.
 
 After installing, the script lives on as a repeatable management TUI, **`sudoku-dash`**:
 
@@ -157,11 +160,13 @@ sudo sudoku-dash
 
 ### Environment variables
 
-All optional; put them before the command, e.g. `sudo SUDOKU_PORT=8443 SUDOKU_WARP=true bash -c "$(curl …)"`. A variable you set is never asked about in the wizard.
+All optional; put them before the command, e.g. `sudo SUDOKU_PORT=8443 SUDOKU_WARP=true bash /tmp/sudoku-dash.sh`. A variable you set is never asked about in the wizard.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SUDOKU_PORT` | random 50001-65535 | Server listen port (**use this to customize the port**) |
+| `SUDOKU_AEAD` | `chacha20-poly1305` | Cipher: `chacha20-poly1305` / `aes-128-gcm` / `none` |
+| `SUDOKU_ASCII` | `up_ascii_down_entropy` | ASCII mode: `up_ascii_down_entropy` / `prefer_entropy` / `prefer_ascii` / `up_entropy_down_ascii` |
 | `SUDOKU_WARP` | `false` | `true` = send all proxied traffic out through Cloudflare WARP (hides the VPS egress IP, unlocks geo-restrictions). Switches to [sudoku-sing-box](https://github.com/SUDOKU-ASCII/sudoku-sing-box); legacy name `SUDOKU_WARP_GOOGLE` still works |
 | `SUDOKU_VERSION` | latest release | Sudoku release tag to install, e.g. `v0.5.1` |
 | `SERVER_IP` | auto-detect | Public IP or domain written into share links |
@@ -186,7 +191,7 @@ All optional; put them before the command, e.g. `sudo SUDOKU_PORT=8443 SUDOKU_WA
 
 ```bash
 # at install time
-sudo SUDOKU_PORT=8443 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh -o /tmp/sudoku-dash.sh && sudo SUDOKU_PORT=8443 bash /tmp/sudoku-dash.sh
 # afterwards: sudo sudoku-dash → Settings → Change port (firewall and service are updated; clients need the new link)
 ```
 
@@ -194,7 +199,7 @@ sudo SUDOKU_PORT=8443 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SU
 
 ```bash
 # enable at install time
-sudo SUDOKU_WARP=true bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh -o /tmp/sudoku-dash.sh && sudo SUDOKU_WARP=true bash /tmp/sudoku-dash.sh
 # toggle any time: sudo sudoku-dash → Settings → Enable / Disable WARP
 ```
 
@@ -215,7 +220,8 @@ sudo sudoku-dash --upgrade
 # uninstall (interactive runs ask whether to also delete config and keys):
 sudo sudoku-dash --uninstall
 # when the script is not on the box:
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)" _ --uninstall
+curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh -o /tmp/sudoku-dash.sh
+sudo bash /tmp/sudoku-dash.sh --uninstall
 ```
 
 Other commands: `sudoku-dash status` (plain-text status), `sudoku-dash --help`.
@@ -227,10 +233,10 @@ Other commands: `sudoku-dash status` (plain-text status), `sudoku-dash --help`.
 | Item | Default |
 | --- | --- |
 | Port | random 50001-65535 |
-| Mode | `up_ascii_down_entropy` |
-| AEAD | `chacha20-poly1305` |
+| ASCII mode | `up_ascii_down_entropy` (selectable) |
+| AEAD | `chacha20-poly1305` (selectable) |
 | `custom_table` | random per install (X / P / V layout) |
-| `enable_pure_downlink` | `false` |
+| Downlink | packed (`enable_pure_downlink: false`) |
 | Padding | server 2–7 |
 | HTTP mask | enabled · `auto` · multiplex `on` · random path root (client export uses `httpmask.disable: true`) |
 | WARP | `false` |

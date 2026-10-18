@@ -5,17 +5,19 @@
 # https://github.com/SUDOKU-ASCII/easy-install
 #
 # Install (or open dash when already installed):
-#   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh)"
+#   curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/install.sh -o /tmp/sudoku-dash.sh && sudo bash /tmp/sudoku-dash.sh
 # Afterwards, manage everything any time with:
 #   sudo sudoku-dash
 #
-# Sub-commands (append after the script, e.g.  bash -c "$(curl -fsSL URL)" _ --upgrade):
+# Sub-commands (append after the script, e.g.  sudo bash /tmp/sudoku-dash.sh --upgrade):
 #   install | dash | status | --upgrade | --uninstall | --help | --version
 #
 # SUDOKU-DASH-MARKER
 #
 # Environment variables (all optional):
 #   SUDOKU_PORT          Server port (default: random free port in 50001-65535)
+#   SUDOKU_AEAD          chacha20-poly1305 | aes-128-gcm | none (default: chacha20-poly1305)
+#   SUDOKU_ASCII         up_ascii_down_entropy | prefer_entropy | prefer_ascii | up_entropy_down_ascii
 #   SUDOKU_WARP          Route all proxied traffic through Cloudflare WARP (default: false)
 #   SUDOKU_VERSION       Sudoku kernel tag to install (default: latest release)
 #   SUDOKU_YES           1 = never prompt, accept defaults / env values (default: auto, no TTY => 1)
@@ -45,6 +47,8 @@ export PATH="${PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bi
 DASH_VERSION="1.0.0"
 
 SUDOKU_PORT="${SUDOKU_PORT:-}"
+SUDOKU_AEAD="${SUDOKU_AEAD:-}"
+SUDOKU_ASCII="${SUDOKU_ASCII:-}"
 SUDOKU_VERSION="${SUDOKU_VERSION:-}"
 SUDOKU_CLIENT_PORT_INPUT="${SUDOKU_CLIENT_PORT:-}"
 SUDOKU_CLIENT_PORT="${SUDOKU_CLIENT_PORT:-10233}"
@@ -95,6 +99,9 @@ SING_BOX_CACHE_DIR="${SUDOKU_SING_BOX_CACHE_DIR:-/var/lib/sudoku-sing-box}"
 SUDOKU_WARP_DIR="${CONFIG_DIR}/warp"
 SUDOKU_WARP_PROFILE="${SUDOKU_WARP_DIR}/wgcf-profile.conf"
 DEFAULT_ASCII_MODE="up_ascii_down_entropy"
+DEFAULT_AEAD="chacha20-poly1305"
+ASCII_MODE="${DEFAULT_ASCII_MODE}"
+AEAD_METHOD="${DEFAULT_AEAD}"
 
 CUSTOM_TABLE=""
 DISABLE_HTTP_MASK="false"
@@ -636,6 +643,21 @@ normalize_settings() {
     cf_fallback_force=$(normalize_bool "${SUDOKU_CF_FALLBACK_FORCE}") || die "Invalid SUDOKU_CF_FALLBACK_FORCE=${SUDOKU_CF_FALLBACK_FORCE} (expected true/false)"
     warp_enabled=$(normalize_bool "${SUDOKU_WARP}") || die "Invalid SUDOKU_WARP=${SUDOKU_WARP} (expected true/false)"
 
+    if [[ -n "${SUDOKU_AEAD}" ]]; then
+        AEAD_METHOD=$(trim_space "${SUDOKU_AEAD}"); AEAD_METHOD="${AEAD_METHOD,,}"
+        case "${AEAD_METHOD}" in
+            chacha20-poly1305|aes-128-gcm|none) ;;
+            *) die "Invalid SUDOKU_AEAD=${SUDOKU_AEAD} (expected chacha20-poly1305/aes-128-gcm/none)" ;;
+        esac
+    fi
+    if [[ -n "${SUDOKU_ASCII}" ]]; then
+        ASCII_MODE=$(trim_space "${SUDOKU_ASCII}"); ASCII_MODE="${ASCII_MODE,,}"
+        case "${ASCII_MODE}" in
+            prefer_entropy|prefer_ascii|up_ascii_down_entropy|up_entropy_down_ascii) ;;
+            *) die "Invalid SUDOKU_ASCII=${SUDOKU_ASCII} (expected prefer_entropy/prefer_ascii/up_ascii_down_entropy/up_entropy_down_ascii)" ;;
+        esac
+    fi
+
     SUDOKU_PORT=$(trim_space "${SUDOKU_PORT}")
     if [[ -n "${SUDOKU_PORT}" ]] && ! is_valid_port "${SUDOKU_PORT}"; then
         die "Invalid SUDOKU_PORT=${SUDOKU_PORT} (expected 1-65535)"
@@ -742,7 +764,7 @@ ensure_root() {
     if [[ -f "${0}" && -r "${0}" ]] && command -v sudo >/dev/null 2>&1; then
         exec sudo -E bash "${0}" "$@"
     fi
-    die "$(L '请使用 root 权限运行（sudo bash -c "$(curl ...)"）。' 'Please run as root (use sudo).')"
+    die "$(L '请使用 root 权限运行（sudo bash install.sh）。' 'Please run as root (use sudo).')"
 }
 
 detect_pkg_manager() {
@@ -970,6 +992,8 @@ load_existing_config_context() {
     v=$(cfg_get .local_port); is_valid_port "${v}" && SUDOKU_PORT="${v}"
     v=$(cfg_get .key); [[ -n "${v}" ]] && MASTER_PUBLIC_KEY="${v}"
     v=$(cfg_get .custom_table); [[ -n "${v}" ]] && CUSTOM_TABLE="${v}"
+    v=$(cfg_get .aead); [[ -n "${v}" ]] && AEAD_METHOD="${v}"
+    v=$(cfg_get .ascii); [[ -n "${v}" ]] && ASCII_MODE="${v}"
     v=$(cfg_get .fallback_address); [[ -n "${v}" ]] && SUDOKU_FALLBACK="${v}"
     v=$(cfg_get .httpmask.disable); [[ -n "${v}" ]] && DISABLE_HTTP_MASK="${v}"
     v=$(cfg_get .httpmask.mode); [[ -n "${v}" ]] && HTTP_MASK_MODE="${v}"
@@ -1078,9 +1102,9 @@ create_config() {
   "server_address": "",
   "fallback_address": "${SUDOKU_FALLBACK}",
   "key": "${MASTER_PUBLIC_KEY}",
-  "aead": "chacha20-poly1305",
+  "aead": "${AEAD_METHOD}",
   "suspicious_action": "fallback",
-  "ascii": "${DEFAULT_ASCII_MODE}",
+  "ascii": "${ASCII_MODE}",
   "padding_min": 2,
   "padding_max": 7,
   "custom_table": "${CUSTOM_TABLE}",
@@ -1693,14 +1717,15 @@ write_sing_box_warp_config() {
         "${SUDOKU_PORT}" \
         "${MASTER_PUBLIC_KEY}" \
         "${SUDOKU_FALLBACK}" \
-        "${DEFAULT_ASCII_MODE}" \
+        "${ASCII_MODE}" \
         "${CUSTOM_TABLE}" \
         "${DISABLE_HTTP_MASK}" \
         "${HTTP_MASK_MODE}" \
         "${HTTP_MASK_TLS}" \
         "${HTTP_MASK_HOST}" \
         "${HTTP_MASK_PATH_ROOT}" \
-        "${HTTP_MASK_MULTIPLEX}" << 'PY'
+        "${HTTP_MASK_MULTIPLEX}" \
+        "${AEAD_METHOD}" << 'PY'
 import json
 import sys
 from pathlib import Path
@@ -1718,6 +1743,7 @@ httpmask_tls = sys.argv[10].lower() == "true"
 httpmask_host = sys.argv[11]
 httpmask_path_root = sys.argv[12]
 httpmask_multiplex = sys.argv[13]
+aead_method = sys.argv[14]
 
 sections = {}
 section = None
@@ -1773,7 +1799,7 @@ sudoku_inbound = {
     "listen": "::",
     "listen_port": sudoku_port,
     "key": sudoku_key,
-    "aead": "chacha20-poly1305",
+    "aead": aead_method,
     "ascii": ascii_mode,
     "padding_min": 2,
     "padding_max": 7,
@@ -1897,8 +1923,8 @@ make_short_link() { # <client-private-key> -> link on stdout
   "local_port": ${SUDOKU_CLIENT_PORT},
   "server_address": "${server_address}",
   "key": "${key}",
-  "aead": "chacha20-poly1305",
-  "ascii": "${DEFAULT_ASCII_MODE}",
+  "aead": "${AEAD_METHOD}",
+  "ascii": "${ASCII_MODE}",
   "padding_min": 5,
   "padding_max": 15,
   "custom_table": "${CUSTOM_TABLE}",
@@ -2012,10 +2038,10 @@ render_node_yaml() {
     printf '  server: "%s"\n' "${server_escaped}"
     printf '  port: %s\n' "${SUDOKU_PORT}"
     printf '  key: "%s"\n' "${key_escaped}"
-    echo "  aead-method: chacha20-poly1305"
+    printf '  aead-method: %s\n' "${AEAD_METHOD}"
     echo "  padding-min: 2"
     echo "  padding-max: 7"
-    printf '  table-type: %s\n' "${DEFAULT_ASCII_MODE}"
+    printf '  table-type: %s\n' "${ASCII_MODE}"
     if [[ -n "${CUSTOM_TABLE:-}" ]]; then
         printf '  custom-table: %s\n' "${CUSTOM_TABLE}"
     fi
@@ -2152,6 +2178,36 @@ wizard_questions() {
         fi
     elif is_tcp_port_in_use "${SUDOKU_PORT}"; then
         die "$(L "端口 ${SUDOKU_PORT} 已被占用。" "Port ${SUDOKU_PORT} is already in use.")"
+    fi
+
+    if [[ -z "${SUDOKU_AEAD}" && "${UI_TTY}" == "1" && "${ASSUME_YES}" != "1" ]]; then
+        ui_title "$(L '加密方式 (AEAD)' 'Encryption (AEAD)')"
+        MENU_DEFAULT=0
+        ui_menu \
+            "chacha20-poly1305   $(L '（推荐，默认）' '(recommended, default)')" \
+            "aes-128-gcm         $(L '（有 AES 硬件加速时更快）' '(faster with AES hardware)')" \
+            "none                $(L '（不加密，不推荐）' '(no encryption, not recommended)')"
+        case "${MENU_SEL}" in
+            1) AEAD_METHOD="aes-128-gcm" ;;
+            2) AEAD_METHOD="none" ;;
+            *) AEAD_METHOD="chacha20-poly1305" ;;
+        esac
+    fi
+
+    if [[ -z "${SUDOKU_ASCII}" && "${UI_TTY}" == "1" && "${ASSUME_YES}" != "1" ]]; then
+        ui_title "$(L 'ASCII 模式' 'ASCII mode')"
+        MENU_DEFAULT=0
+        ui_menu \
+            "up_ascii_down_entropy   $(L '（上行 ASCII / 下行低熵，默认）' '(uplink ASCII / downlink entropy, default)')" \
+            "prefer_entropy          $(L '（双向低熵布局）' '(low-entropy both ways)')" \
+            "prefer_ascii            $(L '（双向可打印 ASCII）' '(printable ASCII both ways)')" \
+            "up_entropy_down_ascii   $(L '（上行低熵 / 下行 ASCII）' '(uplink entropy / downlink ASCII)')"
+        case "${MENU_SEL}" in
+            1) ASCII_MODE="prefer_entropy" ;;
+            2) ASCII_MODE="prefer_ascii" ;;
+            3) ASCII_MODE="up_entropy_down_ascii" ;;
+            *) ASCII_MODE="up_ascii_down_entropy" ;;
+        esac
     fi
 
     if [[ -z "${SUDOKU_WARP_PRESET}" && "${UI_TTY}" == "1" && "${ASSUME_YES}" != "1" ]]; then
