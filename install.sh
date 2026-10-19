@@ -1247,6 +1247,7 @@ EOF
         printf '%s\n' "${out}" >&2
         return 1
     fi
+    api_auto_enable
 }
 
 migrate_legacy_httpmask_config_inplace() {
@@ -2473,6 +2474,12 @@ upgrade_kernel() {
         ui_run "$(L '更新 sudoku-sing-box' 'Updating sudoku-sing-box')" install_sing_box_kernel || warn "$(L 'sudoku-sing-box 更新失败，保留旧版本。' 'sudoku-sing-box update failed; keeping the old build.')"
         sync_singbox_users "${CONFIG_FILE}" "${SING_BOX_CONFIG_FILE}" || true
     fi
+    local had_api
+    had_api=$(cfg_get .external_controller)
+    api_auto_enable
+    if [[ -z "${had_api}" && -n "$(cfg_get .external_controller)" ]]; then
+        info "$(L '已启用实时统计 API（仅 127.0.0.1）。' 'Enabled the live stats API (127.0.0.1 only).')"
+    fi
     if ui_run "$(L '重启服务' 'Restarting service')" svc_restart; then
         return 0
     fi
@@ -2557,6 +2564,7 @@ cmd_uninstall() {
 ctx_load() {
     load_existing_config_context || return 1
     USERS_CAP=""
+    API_CAP=""
     return 0
 }
 
@@ -2634,6 +2642,189 @@ users_capable() {
         rm -f "${tmp}"
     fi
     [[ "${USERS_CAP}" == "yes" ]]
+}
+
+# ── Live per-user stats from the kernel's REST API (external_controller, Sudoku ≥ 0.5.2 main) ──
+API_CAP=""
+API_BASE=""
+API_SECRET=""
+API_OK=0
+API_COUNT=0
+API_ACTIVE=0
+API_UP=0
+API_DOWN=0
+API_USED_SUM=0
+API_OFFERED=0
+declare -a API_ROWS=()
+declare -A API_BY_NAME=()
+API_ROW=""
+R_NAME="" R_BLOCKED="" R_EXCEEDED="" R_CONNS=0 R_UP=0 R_DOWN=0 R_UPT=0 R_DOWNT=0 R_USED=0 R_LIMIT=0
+
+# Does the installed kernel know `external_controller`? Older ones ignore unknown keys; newer ones validate it.
+controller_capable() {
+    if [[ -n "${API_CAP}" ]]; then [[ "${API_CAP}" == "yes" ]]; return $?; fi
+    API_CAP="no"
+    if [[ "${WARP_ENABLED}" != "true" && -x "${INSTALL_DIR}/sudoku" && -f "${CONFIG_FILE}" ]]; then
+        local tmp out
+        tmp=$(mktemp)
+        if jq '.external_controller = "zz"' "${CONFIG_FILE}" >"${tmp}" 2>/dev/null; then
+            out=$("${INSTALL_DIR}/sudoku" -c "${tmp}" -test 2>&1) || true
+            if printf '%s' "${out}" | grep -q 'external_controller'; then API_CAP="yes"; fi
+        fi
+        rm -f "${tmp}"
+    fi
+    [[ "${API_CAP}" == "yes" ]]
+}
+
+api_load() {
+    local addr
+    API_BASE=""; API_SECRET=""
+    controller_capable || return 1
+    addr=$(cfg_get .external_controller)
+    [[ -n "${addr}" ]] || return 1
+    API_SECRET=$(cfg_get .secret)
+    case "${addr}" in
+        :*) addr="127.0.0.1${addr}" ;;
+        0.0.0.0:*) addr="127.0.0.1:${addr#0.0.0.0:}" ;;
+        \[::\]:*) addr="[::1]:${addr#\[::\]:}" ;;
+    esac
+    API_BASE="http://${addr}"
+}
+
+api_get() { # <path>; the token goes through stdin so it never shows up in `ps`
+    [[ -n "${API_BASE}" ]] || return 1
+    if [[ -n "${API_SECRET}" ]]; then
+        printf 'header = "Authorization: Bearer %s"\n' "${API_SECRET}" \
+            | curl -fsS -K - --noproxy '*' --connect-timeout 1 --max-time 2 "${API_BASE}$1" 2>/dev/null
+    else
+        curl -fsS --noproxy '*' --connect-timeout 1 --max-time 2 "${API_BASE}$1" 2>/dev/null
+    fi
+}
+
+api_fetch_users() {
+    local json tag rest i=0
+    API_OK=0; API_ROWS=(); API_BY_NAME=(); API_COUNT=0; API_ACTIVE=0; API_UP=0; API_DOWN=0; API_USED_SUM=0
+    json=$(api_get /users) || return 1
+    jq -e '.users | type == "array"' >/dev/null 2>&1 <<<"${json}" || return 1
+    while IFS=$'\t' read -r tag rest; do
+        case "${tag}" in
+            H) IFS=$'\t' read -r API_COUNT API_ACTIVE API_UP API_DOWN <<<"${rest}" ;;
+            U) API_ROWS+=("${rest}") ;;
+        esac
+    done < <(jq -r '"H\t\(.count)\t\(.active)\t\(.up)\t\(.down)",
+        (.users[]? | "U\t\(.name)\t\([.blocked, .exceeded, .conns, .up, .down, .upTotal, .downTotal, .used, .limit] | map(tostring) | join("\t"))")' <<<"${json}" 2>/dev/null)
+    [[ "${API_COUNT}" =~ ^[0-9]+$ ]] || return 1
+    for ((i = 0; i < ${#API_ROWS[@]}; i++)); do
+        IFS=$'\t' read -r R_NAME _ <<<"${API_ROWS[i]}"
+        API_BY_NAME["${R_NAME}"]="${i}"
+    done
+    API_USED_SUM=$(jq -r '[.users[]?.used] | add // 0' <<<"${json}" 2>/dev/null || echo 0)
+    API_OK=1
+}
+
+api_refresh() {
+    API_OK=0
+    api_load || return 1
+    svc_is_active || return 1
+    api_fetch_users
+}
+
+# api_row_for <config index> <alias>: load that user's live row into R_*; fails if the API has no matching entry.
+api_row_for() {
+    local idx=""
+    API_ROW=""
+    ((API_OK)) || return 1
+    if [[ -n "$2" ]]; then
+        [[ -n "${API_BY_NAME[$2]+x}" ]] && idx="${API_BY_NAME[$2]}"
+    elif ! config_dirty && ((API_COUNT == $(users_count))); then
+        idx="$1"
+    fi
+    [[ -n "${idx}" ]] || return 1
+    API_ROW="${API_ROWS[idx]}"
+    IFS=$'\t' read -r R_NAME R_BLOCKED R_EXCEEDED R_CONNS R_UP R_DOWN R_UPT R_DOWNT R_USED R_LIMIT <<<"${API_ROW}"
+}
+
+api_enable() { # loopback-only random port + random token
+    local port="" secret lport
+    lport=$(cfg_get .local_port)
+    for _ in 1 2 3 4 5 6 7 8; do
+        port=$(pick_random_high_port) || return 1
+        [[ "${port}" != "${lport}" ]] && break
+    done
+    secret=$(openssl rand -hex 16 2>/dev/null) || return 1
+    cfg_edit --arg a "127.0.0.1:${port}" --arg s "${secret}" '. + {external_controller: $a, secret: $s}' || return 1
+    api_load || true
+}
+
+# Turn the API on when the kernel has it and the config does not (used after install / upgrade).
+api_auto_enable() {
+    API_CAP=""
+    controller_capable || return 0
+    [[ -z "$(cfg_get .external_controller)" ]] || return 0
+    api_enable || true
+}
+
+api_offer_enable() { # once per dash session, from the Users screen
+    ((API_OFFERED)) && return 0
+    API_OFFERED=1
+    controller_capable || return 0
+    [[ -z "$(cfg_get .external_controller)" ]] || return 0
+    printf '\n'
+    info "$(L '内核支持实时统计 API：可按用户显示在线状态、实时速率和本月已用流量。' 'The kernel has a stats API: per-user online state, live rates and this month'\''s usage.')"
+    ui_confirm "$(L '启用？（仅监听 127.0.0.1，随机端口与令牌；需重启服务）' 'Enable it? (127.0.0.1 only, random port and token; restarts the service)')" y || return 0
+    if api_enable; then
+        ui_run "$(L '重启服务' 'Restarting service')" svc_restart || warn "$(L '重启失败，请到主菜单重启。' 'Restart failed; restart from the main menu.')"
+    else
+        err "$(L '写入配置失败，已回滚。' 'Failed to write config; rolled back.')"
+    fi
+}
+
+# Quota is in decimal GB (1e9), so usage is shown in decimal units to match.
+fmt_dbytes() { # <bytes> -> "12.34 GB"
+    local b="${1:-0}" unit=0 scaled
+    local -a units=(B KB MB GB TB PB)
+    scaled=$((b * 100))
+    while ((scaled >= 100000 && unit < 5)); do
+        scaled=$((scaled / 1000))
+        unit=$((unit + 1))
+    done
+    if ((unit == 0)); then printf '%d B' "${b}"; return 0; fi
+    printf '%d.%02d %s' $((scaled / 100)) $((scaled % 100)) "${units[unit]}"
+}
+
+fmt_dquota() { fmt_dbytes "$1" | sed 's/\.00 / /'; }
+
+quota_pct() { # used limit -> 0..n
+    ((${2:-0} > 0)) || { printf '0'; return 0; }
+    printf '%d' $((${1:-0} * 100 / ${2}))
+}
+
+quota_bar() { # <pct> <width>
+    local pct="${1:-0}" w="${2:-20}" f on off col="${C_OK}"
+    ((pct > 100)) && pct=100
+    f=$((pct * w / 100))
+    if [[ "${UI_UTF8}" == "1" ]]; then on="█"; off="░"; else on="#"; off="-"; fi
+    ((pct >= 80)) && col="${C_WARN}"
+    ((pct >= 100)) && col="${C_ERR}"
+    printf '%s%s%s%s%s' "${col}" "$(rep "${on}" "${f}")" "${C_DIM}" "$(rep "${off}" $((w - f)))" "${C_RESET}"
+}
+
+month_reset_date() { # first day of next month (server local time, when the monthly counters reset)
+    local y m
+    y=$(date +%Y); m=$((10#$(date +%m)))
+    if ((m == 12)); then y=$((y + 1)); m=1; else m=$((m + 1)); fi
+    printf '%04d-%02d-01' "${y}" "${m}"
+}
+
+rate_cell() { # <bytes/s>
+    if ((${1:-0} > 0)); then fmt_rate "$1"; else printf '%s-%s' "${C_DIM}" "${C_RESET}"; fi
+}
+
+api_state_text() { # uses R_*
+    if [[ "${R_BLOCKED}" == "true" ]]; then printf '%s%s%s' "${C_ERR}" "$(L '已封禁' 'blocked')" "${C_RESET}"
+    elif [[ "${R_EXCEEDED}" == "true" ]]; then printf '%s%s%s' "${C_WARN}" "$(L '已超额' 'exceeded')" "${C_RESET}"
+    elif ((R_CONNS > 0)); then printf '%s%s %s%s' "${C_OK}" "${G_DOT}" "$(L '在线' 'online')" "${C_RESET}"
+    else printf '%s%s %s%s' "${C_DIM}" "${G_RING}" "$(L '空闲' 'idle')" "${C_RESET}"; fi
 }
 
 users_count() { jq -r '(.users // []) | length' "${CONFIG_FILE}" 2>/dev/null || echo 0; }
@@ -2766,8 +2957,8 @@ user_delete() { # <index>
     users_apply_prompt
 }
 
-# Per-user activity from the journal. The core does not export per-user byte counters, so we
-# report what it does log: session starts, plus quota/limit events.
+# Per-user activity from the journal: session starts, last seen, quota/limit events. This is the
+# only per-user signal on kernels without the stats API; with the API it still supplies "last seen".
 declare -A ACT_N=() ACT_LAST=() ACT_Q=()
 collect_activity() {
     ACT_N=(); ACT_LAST=(); ACT_Q=()
@@ -2778,10 +2969,14 @@ collect_activity() {
         ACT_N["${alias}"]="${n}"; ACT_LAST["${alias}"]="${last}"; ACT_Q["${alias}"]="${q}"
     done < <("${JOURNALCTL}" -u "$(svc_name)" --since "24 hours ago" -o short-iso --no-pager 2>/dev/null | awk '
         {
-            if (match($0, /\[User:[^]]*\]/) == 0) next
-            a = substr($0, RSTART + 6, RLENGTH - 7)
             low = tolower($0)
-            if (low ~ /session start/) n[a]++
+            if (match($0, /\[User:[^]]*\]/)) {
+                a = substr($0, RSTART + 6, RLENGTH - 7)
+                if (low ~ /session start/) n[a]++
+            } else if (match($0, /inbound Sudoku user [^ ]+ from/)) {
+                a = substr($0, RSTART + 20, RLENGTH - 25)
+                n[a]++
+            } else next
             if (low ~ /quota|exceed|limit/) q[a] = 1
             last[a] = $1
             seen[a] = 1
@@ -2804,6 +2999,43 @@ user_speed_text() { # down up
 }
 
 users_table() {
+    if ((API_OK)); then users_table_live; else users_table_static; fi
+}
+
+users_table_live() {
+    local i=0 alias key down up data blocked hdr state dn upr used lim pct cell
+    printf -v hdr '%s %s %s %s %s %s' "$(pad_right '#' 2)" "$(pad_right "$(L '用户' 'User')" 11)" "$(pad_right "$(L '状态' 'State')" 9)" \
+        "$(pad_right "${G_DN} $(L '下载' 'Down')" 11)" "$(pad_right "${G_UP} $(L '上传' 'Up')" 11)" "$(L '本月已用 / 额度' 'Month used / quota')"
+    box_top "$(L '用户' 'Users')"
+    box_row "${C_DIM}${hdr}${C_RESET}"
+    box_sep
+    while IFS=$'\t' read -r alias key down up data blocked; do
+        [[ "${alias}" == "-" ]] && alias=""
+        if api_row_for "${i}" "${alias}"; then
+            state=$(api_state_text); dn=$(rate_cell "${R_DOWN}"); upr=$(rate_cell "${R_UP}")
+            used=$(fmt_dbytes "${R_USED}")
+            if ((R_LIMIT > 0)); then
+                pct=$(quota_pct "${R_USED}" "${R_LIMIT}")
+                cell="${used} / $(fmt_dquota "${R_LIMIT}")"
+                ((pct >= 100)) && cell="${C_ERR}${cell}${C_RESET}" || { ((pct >= 80)) && cell="${C_WARN}${cell}${C_RESET}"; }
+            else
+                cell="${used} ${C_DIM}/ ∞${C_RESET}"
+            fi
+        else
+            if [[ "${blocked}" == "true" ]]; then state="${C_ERR}$(L '已封禁' 'blocked')${C_RESET}"; else state="${C_DIM}$(L '待重启' 'pending')${C_RESET}"; fi
+            dn="${C_DIM}-${C_RESET}"; upr="${C_DIM}-${C_RESET}"
+            cell="${C_DIM}-$([[ "${data}" != 0 ]] && printf ' / %sG' "${data}")${C_RESET}"
+        fi
+        box_row "$(pad_right "$((i + 1))" 2) $(pad_right "$(name=${alias:-${key:0:8}}; printf '%s' "${name:0:11}")" 11) $(pad_right "${state}" 9) $(pad_right "${dn}" 11) $(pad_right "${upr}" 11) ${cell}"
+        i=$((i + 1))
+    done < <(jq -r '(.users // [])[] | [(.alias // "-"), (.key // ""), (.bandwidth[0] // 0), (.bandwidth[1] // 0), (.data // 0), (.blocked // false)] | @tsv' "${CONFIG_FILE}")
+    box_sep
+    lim=$(printf '%s %s · %s %s · %s %s' "${API_ACTIVE}" "$(L '在线' 'online')" "${G_DN}$(fmt_rate "${API_DOWN}")" "${G_UP}$(fmt_rate "${API_UP}")" "$(L '全部用户本月' 'all users this month')" "$(fmt_dbytes "${API_USED_SUM}")")
+    box_row "${C_DIM}${lim}${C_RESET}"
+    box_bottom
+}
+
+users_table_static() {
     local i=0 alias key down up data blocked state lim quota sess hdr
     printf -v hdr '%s %s %s %s %s %s %s' "$(pad_right '#' 2)" "$(pad_right "$(L '用户' 'User')" 14)" "$(pad_right 'Key' 9)" \
         "$(pad_right "$(L '限速' 'Speed')" 12)" "$(pad_right "$(L '流量' 'Quota')" 7)" "$(pad_right "$(L '状态' 'State')" 8)" "$(if init_is_openrc; then L '会话' 'Sess'; else L '24h会话' '24h'; fi)"
@@ -2824,37 +3056,79 @@ users_table() {
 }
 
 user_detail() { # <index>
-    local i="$1" alias key blocked
+    local i="$1" alias key blocked pct
     while :; do
         alias=$(user_field "${i}" '.alias'); key=$(user_field "${i}" '.key'); blocked=$(user_field "${i}" '.blocked')
         [[ -n "${key}" ]] || return 0
+        api_refresh || true
+        collect_activity
         ui_clear
         box_top "$(L "用户: ${alias:-${key:0:8}}" "User: ${alias:-${key:0:8}}")"
         kv "$(L '密钥' 'Key')" "${key:0:16}…"
+        if api_row_for "${i}" "${alias}"; then
+            kv "$(L '状态' 'State')" "$(api_state_text)$( ((R_CONNS > 0)) && printf '  %s%s %s%s' "${C_DIM}" "${R_CONNS}" "$(L '个连接' 'connections')" "${C_RESET}")"
+            kv "$(L '实时速率' 'Live rate')" "${G_DN} $(fmt_rate "${R_DOWN}")   ${G_UP} $(fmt_rate "${R_UP}")"
+            if ((R_LIMIT > 0)); then
+                pct=$(quota_pct "${R_USED}" "${R_LIMIT}")
+                kv "$(L '本月已用' 'Used this month')" "$(fmt_dbytes "${R_USED}") / $(fmt_dquota "${R_LIMIT}")  ${pct}%"
+                kv "" "$(quota_bar "${pct}" 30)"
+                if ((R_USED < R_LIMIT)); then
+                    kv "$(L '本月剩余' 'Remaining')" "$(fmt_dbytes $((R_LIMIT - R_USED)))"
+                else
+                    kv "$(L '本月剩余' 'Remaining')" "${C_ERR}$(L '已用完，新连接会被拒绝' 'used up; new connections are refused')${C_RESET}"
+                fi
+                kv "$(L '额度重置' 'Resets on')" "$(month_reset_date) $(L '（服务器本地时间 0 点）' '(server local time, 00:00)')"
+            else
+                kv "$(L '本月已用' 'Used this month')" "$(fmt_dbytes "${R_USED}") ${C_DIM}($(L '无额度限制' 'no quota'))${C_RESET}"
+                kv "$(L '统计重置' 'Counter resets')" "$(month_reset_date)"
+            fi
+            kv "$(L '本次运行累计' 'Since start')" "${G_DN} $(fmt_dbytes "${R_DOWNT}")   ${G_UP} $(fmt_dbytes "${R_UPT}")"
+        else
+            kv "$(L '状态' 'State')" "$([[ "${blocked}" == "true" ]] && L '已封禁' 'blocked' || L '正常' 'active')$( ((API_OK)) && printf '  %s%s%s' "${C_DIM}" "$(L '（实时数据待重启后出现）' '(live data appears after a restart)')" "${C_RESET}")"
+            kv "$(L '流量上限' 'Quota')" "$(user_field "${i}" '.data' | sed 's/^$/∞/') GB"
+        fi
         kv "$(L '限速' 'Speed')" "$(user_speed_text "$(user_field "${i}" '.bandwidth[0]')" "$(user_field "${i}" '.bandwidth[1]')")"
-        kv "$(L '流量上限' 'Quota')" "$(user_field "${i}" '.data' | sed 's/^$/∞/') GB"
-        kv "$(L '状态' 'State')" "$([[ "${blocked}" == "true" ]] && L '已封禁' 'blocked' || L '正常' 'active')"
-        kv "$(if init_is_openrc; then L '会话（日志）' 'Sessions (log)'; else L '24h 会话' 'Sessions 24h'; fi)" "${ACT_N[${alias}]:-0}"
-        kv "$(L '最近活动' 'Last seen')" "${ACT_LAST[${alias}]:--}"
+        if [[ -n "${ACT_LAST[${alias}]:-}" ]]; then
+            kv "$(if init_is_openrc; then L '会话（日志）' 'Sessions (log)'; else L '24h 会话' 'Sessions 24h'; fi)" "${ACT_N[${alias}]:-0}"
+            kv "$(L '最近活动' 'Last seen')" "${ACT_LAST[${alias}]}"
+        fi
         box_bottom
-        dim "  $(L '提示: 内核不上报单用户字节数，这里仅展示会话统计。' 'Note: the core does not report per-user bytes; sessions are derived from logs.')"
+        if ! ((API_OK)); then dim "  $(api_hint)"; fi
         printf '\n'
-        ui_menu "$(L '修改限速 / 流量' 'Edit limits / quota')" \
+        ui_menu "$(L '刷新' 'Refresh')" "$(L '修改限速 / 流量' 'Edit limits / quota')" \
             "$([[ "${blocked}" == "true" ]] && L '解除封禁' 'Unblock' || L '封禁' 'Block')" \
             "$(L '分享链接' 'Share link')" "$(L '删除用户' 'Delete user')" "$(L '返回' 'Back')"
         case "${MENU_SEL}" in
-            0) user_edit_limits "${i}"; ui_pause ;;
-            1) user_toggle_block "${i}"; ui_pause ;;
-            2) show_user_link "${key}" "${alias}" ;;
-            3) user_delete "${i}"; ui_pause; return 0 ;;
+            0) ;;
+            1) user_edit_limits "${i}"; ui_pause ;;
+            2) user_toggle_block "${i}"; ui_pause ;;
+            3) show_user_link "${key}" "${alias}" ;;
+            4) user_delete "${i}"; ui_pause; return 0 ;;
             *) return 0 ;;
         esac
     done
 }
 
+# Why per-user live numbers are missing right now.
+api_hint() {
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        L '提示: WARP 模式（sudoku-sing-box）没有统计 API，这里仅显示日志统计；切回直连模式可获得实时数据。' 'Note: WARP mode (sudoku-sing-box) has no stats API, so only log-derived counts are shown; switch to direct mode for live data.'
+    elif ! controller_capable; then
+        L '提示: 当前内核没有统计 API（需要带 external_controller 的 Sudoku，当前 release v0.5.1 尚不含）。' 'Note: this kernel has no stats API (needs a Sudoku build with external_controller; release v0.5.1 predates it).'
+    elif [[ -z "$(cfg_get .external_controller)" ]]; then
+        L '提示: 统计 API 未启用，进入「用户」页面可一键启用。' 'Note: the stats API is off; open the Users screen to enable it.'
+    elif ! svc_is_active; then
+        L '提示: 服务未运行，无法读取实时数据。' 'Note: the service is not running, so there is no live data.'
+    else
+        L '提示: 统计 API 暂无响应（刚启动 / 配置已改未重启？）。' 'Note: the stats API is not answering (just started, or config changed without a restart?).'
+    fi
+}
+
 users_screen() {
     local n i
+    if users_capable; then api_offer_enable; fi
     while :; do
+        api_refresh || true
         collect_activity
         ui_clear
         if ! users_capable; then
@@ -2875,11 +3149,13 @@ users_screen() {
             box_bottom
         fi
         if config_dirty; then warn "$(L '有未应用的更改（重启服务生效）。' 'Unapplied changes (restart to take effect).')"; fi
+        if ! ((API_OK)); then dim "  $(api_hint)"; fi
         printf '\n'
         if ((n > 0)); then
-            ui_menu "$(L '添加用户' 'Add user')" "$(L '查看 / 管理用户' 'Open a user')" "$(L '返回' 'Back')"
+            ui_menu "$(L '添加用户' 'Add user')" "$(L '查看 / 管理用户' 'Open a user')" "$(L '刷新' 'Refresh')" "$(L '返回' 'Back')"
             case "${MENU_SEL}" in
                 0) user_add; ui_pause ;;
+                2) ;;
                 1)
                     local -a items=()
                     for ((i = 0; i < n; i++)); do items+=("$((i + 1)). $(user_field "${i}" '.alias')"); done
@@ -2986,14 +3262,24 @@ render_overview() {
         kv "$(L '占用' 'Resources')" "CPU ${cpu:-?}% · $(L '内存' 'RAM') $(fmt_bytes "${rss:-0}") · $(L '连接' 'conns') ${conns:-0} · $(L '线程' 'thr') $(proc_threads "${pid}")"
     fi
     n=$(users_count); nb=$(users_blocked_count)
+    api_refresh || true
     if ((n > 0)); then
         line="${n}"
         ((nb > 0)) && line+=" ($(L "${nb} 个已封禁" "${nb} blocked"))"
+        if ((API_OK)); then
+            line+=" · ${C_OK}${API_ACTIVE} $(L '在线' 'online')${C_RESET}"
+        fi
         kv "$(L '用户' 'Users')" "${line}"
+        if ((API_OK)); then
+            kv "$(L '用户流量' 'User traffic')" "${G_DN} $(fmt_rate "${API_DOWN}")  ${G_UP} $(fmt_rate "${API_UP}") ${C_DIM}· $(L '本月' 'month') $(fmt_dbytes "${API_USED_SUM}")${C_RESET}"
+        fi
     elif users_capable; then
         kv "$(L '用户' 'Users')" "$(L '未启用白名单（任意有效密钥可连接）' 'whitelist off (any valid key connects)')"
     else
         kv "$(L '用户' 'Users')" "$(L '单密钥（内核不支持用户控制）' 'single key (kernel has no user control)')"
+    fi
+    if controller_capable && [[ -z "$(cfg_get .external_controller)" ]]; then
+        kv "$(L '实时统计' 'Live stats')" "${C_WARN}$(L '未启用 — 在「用户」页面可一键启用' 'off — enable it from the Users screen')${C_RESET}"
     fi
     line=$(sys_load_line)
     [[ -n "${line}" ]] && kv "$(L '系统' 'System')" "${line}"
@@ -3050,6 +3336,22 @@ monitor_frame() {
     else
         box_row "${C_DIM}$(L '暂无活动连接' 'No active connections')${C_RESET}"
     fi
+    if ((API_OK && API_COUNT > 0)); then
+        local u_name u_blk u_exc u_conns u_up u_down u_used u_limit shown=0 u_cell
+        box_sep
+        box_row "${C_DIM}$(pad_right "$(L '用户' 'User')" 13) $(pad_right "$(L '连接' 'Conn')" 4) $(pad_right "${G_DN} $(L '下载' 'Down')" 11) $(pad_right "${G_UP} $(L '上传' 'Up')" 11) $(L '本月' 'Month')${C_RESET}"
+        while IFS=$'\t' read -r u_name u_blk u_exc u_conns u_up u_down _ _ u_used u_limit; do
+            [[ -n "${u_name}" ]] || continue
+            if ((shown >= 6)); then break; fi
+            shown=$((shown + 1))
+            u_cell=$(fmt_dbytes "${u_used}")
+            ((u_limit > 0)) && u_cell+="/$(fmt_dquota "${u_limit}")"
+            [[ "${u_blk}" == "true" ]] && u_cell+=" ${C_ERR}$(L '封禁' 'blocked')${C_RESET}"
+            [[ "${u_exc}" == "true" ]] && u_cell+=" ${C_WARN}$(L '超额' 'over')${C_RESET}"
+            box_row "$(pad_right "${u_name:0:12}" 13) $(pad_right "${u_conns}" 4) $(pad_right "$(rate_cell "${u_down}")" 11) $(pad_right "$(rate_cell "${u_up}")" 11) ${u_cell}"
+        done < <(printf '%s\n' "${API_ROWS[@]}" | awk -F'\t' '{ print ($5 + $6) "\t" $0 }' | sort -t$'\t' -rn -k1,1 | cut -f2-)
+        ((API_COUNT > shown)) && box_row "${C_DIM}… $(L "另有 $((API_COUNT - shown)) 个用户" "$((API_COUNT - shown)) more users")${C_RESET}"
+    fi
     box_bottom
     printf '  %s%s%s\n' "${C_DIM}" "$(L 'RX = 客户端 → 服务器 · TX = 服务器 → 客户端 · q 返回' 'RX = clients → server · TX = server → clients · q to go back')" "${C_RESET}"
 }
@@ -3064,6 +3366,7 @@ monitor_live() {
     declare -A prev_tx=() prev_rx=() cur_tx=() cur_rx=() ip_rx=() ip_tx=()
     port=$(cfg_get .local_port)
     pid=$(svc_pid || true)
+    api_load || true
     MON_H_RX=(); MON_H_TX=(); MON_TOT_RX=0; MON_TOT_TX=0; MON_PEAK_RX=0; MON_PEAK_TX=0
     MON_RATE_RX=0; MON_RATE_TX=0; MON_CPU=""; MON_RSS=0; MON_CONNS=0; MON_FDS=""; MON_TOP=""
 
@@ -3121,6 +3424,7 @@ monitor_live() {
             MON_RSS=$(proc_rss "${pid}"); MON_FDS=$(proc_fds "${pid}")
         fi
 
+        if [[ -n "${API_BASE}" ]]; then api_fetch_users || true; fi
         frame=$(monitor_frame)
         printf '\033[H'
         while IFS= read -r line; do printf '%s\033[K\n' "${line}"; done <<<"${frame}"

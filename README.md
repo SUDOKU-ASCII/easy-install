@@ -27,7 +27,7 @@ sudo sudoku-dash
 
 - **实时带宽**：服务端 RX / TX 速率、曲线、累计与峰值、各客户端 IP 速率
 - **资源占用**：Sudoku 进程 CPU / 内存 / 连接数 / 线程 / FD，以及系统负载
-- **用户管理**：添加 / 限速 / 限流量 / 封禁 / 删除用户，为每个用户生成独立分享链接
+- **用户管理**：按用户显示在线状态、实时上下行速率、本月已用流量 / 额度；添加 / 限速 / 限流量 / 封禁 / 删除用户，为每个用户生成独立分享链接
 - **版本管理**：升级到最新 release、安装指定版本或预发布、失败自动回滚、手动回滚到备份
 - **服务控制 / 设置**：重启、停止、查看与跟随日志、改端口、开关 WARP、改公网地址
 
@@ -91,7 +91,12 @@ curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/inst
 - 用户控制依赖内核的 `users` 白名单：当前 release（v0.5.1）会忽略该字段，需要 **Sudoku ≥ 0.5.2**（官方主线已合入、尚未发布），或启用 WARP 模式（自带的 sudoku-sing-box 已支持）。内核不支持时 dash 会明确提示，不会让你误以为限制已生效。
 - 添加第一个用户时会把安装时的默认密钥自动加为 `default` 用户，避免现有客户端被锁出。
 - 修改用户后需重启服务才生效（dash 会询问并代为重启）。
-- 内核不暴露「单用户字节数」，用户列表展示的是限速 / 流量上限 / 状态，以及从日志统计的 24 小时会话数；实时流量是该端口的总 RX / TX。
+- **按用户的实时数据来自内核的 RESTful API**（`external_controller`，Sudoku 主线新增，只读）。内核支持时，安装 / 升级会自动写入 `external_controller`（仅监听 `127.0.0.1` 的随机端口）和随机 `secret`；对已安装的机器，打开 dash →「用户」会询问是否一键启用。启用后 dash 显示：
+  - 每个用户的 **在线 / 空闲 / 已封禁 / 已超额** 状态、连接数、实时下载 / 上传速率；
+  - **本月已用流量**（线路字节，内核持久化到 `config.usage.json`，重启不丢，按服务器本地时间每月 1 日清零）、额度、剩余量、进度条与重置日期；
+  - 本次运行累计流量；总览与「实时带宽」页也会列出各用户速率。
+- 额度（`data`，单位 GB，按 1 GB = 10⁹ 字节计）用完后内核会断开该用户现有连接并拒绝新连接；想提前清零某用户用量，停服务后删掉 `config.usage.json` 里对应条目即可。
+- 不支持的情况：WARP 模式（sudoku-sing-box 没有统计 API）与 v0.5.1 release 无实时数据，dash 只显示限速 / 额度 / 状态和日志统计的会话数，并在界面里说明原因。
 
 ### 升级 / 卸载
 
@@ -123,6 +128,7 @@ sudo bash /tmp/sudoku-dash.sh --uninstall
 | Padding | 服务端 2–7 |
 | HTTP Mask | 启用 · `auto` · multiplex `on` · 随机路径前缀（客户端导出为 `httpmask.disable: true`） |
 | WARP | `false` |
+| 统计 API | 内核支持时自动开启：`127.0.0.1:<随机端口>` + 随机 `secret`（仅本机） |
 | 回落 | 内置 Cloudflare 风格 500 页 `127.0.0.1:10232`（失败回退 80 端口） |
 | 客户端本地端口 | `10233` |
 | 路径 | 配置 `/etc/sudoku/config.json` · 二进制 `/usr/local/bin/sudoku` · 服务 `sudoku`（WARP 模式为 `sudoku-sing-box`） |
@@ -160,7 +166,7 @@ sudo sudoku-dash
 
 - **Live bandwidth**: server RX / TX rate, sparkline, totals and peaks, per-client-IP rates
 - **Resource usage**: Sudoku CPU / RAM / connections / threads / FDs, system load
-- **Users**: add / rate-limit / data-cap / block / delete users, one share link per user
+- **Users**: per-user online state, live up/down rate and this month's usage vs. quota; add / rate-limit / data-cap / block / delete users, one share link per user
 - **Versions**: upgrade to latest, install any release or pre-release, automatic rollback on failure, manual rollback to a backup
 - **Service / settings**: restart, stop, view and follow logs, change port, toggle WARP, change public host
 
@@ -224,7 +230,12 @@ curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/inst
 - User control relies on the kernel's `users` whitelist. The current release (v0.5.1) silently ignores it; you need **Sudoku ≥ 0.5.2** (merged upstream, not released yet) or WARP mode (the bundled sudoku-sing-box already supports it). On an unsupported kernel dash says so instead of pretending limits are active.
 - Adding the first user also adds your install-time key as user `default`, so existing clients are not locked out.
 - User changes need a service restart (dash offers to do it for you).
-- The core does not expose per-user byte counters. The user list shows speed limits / data quota / state plus 24 h session counts derived from logs; live traffic is the aggregate RX / TX of the listening port.
+- **Per-user live data comes from the kernel's RESTful API** (`external_controller`, read-only, new on Sudoku main). When the kernel supports it, install / upgrade writes `external_controller` (a random port on `127.0.0.1` only) plus a random `secret` into the config; on an existing install, open dash → Users and it offers to enable it in one step. Once on, dash shows:
+  - each user's **online / idle / blocked / exceeded** state, connection count, and live download / upload rate;
+  - **usage this month** (wire bytes, persisted by the kernel in `config.usage.json` so restarts don't lose it, reset on the 1st of each month in server local time), quota, remaining, a progress bar and the reset date;
+  - totals since the process started; the overview and Live bandwidth screens list per-user rates too.
+- A user who uses up their quota (`data`, in GB, 1 GB = 10⁹ bytes) has live connections closed and new ones refused; to reset one user early, stop the service and delete their entry from `config.usage.json`.
+- Not available: WARP mode (sudoku-sing-box has no stats API) and the v0.5.1 release — dash then shows speed limits / quota / state plus log-derived session counts, and says why on screen.
 
 ### Upgrade / uninstall
 
@@ -256,6 +267,7 @@ Other commands: `sudoku-dash status` (plain-text status), `sudoku-dash --help`.
 | Padding | server 2–7 |
 | HTTP mask | enabled · `auto` · multiplex `on` · random path root (client export uses `httpmask.disable: true`) |
 | WARP | `false` |
+| Stats API | auto-enabled when the kernel supports it: `127.0.0.1:<random port>` + random `secret` (local only) |
 | Fallback | built-in Cloudflare-style 500 page on `127.0.0.1:10232` (port 80 as backup) |
 | Client local port | `10233` |
 | Paths | config `/etc/sudoku/config.json` · binary `/usr/local/bin/sudoku` · service `sudoku` (`sudoku-sing-box` in WARP mode) |
