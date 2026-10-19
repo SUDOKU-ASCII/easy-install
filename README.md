@@ -91,12 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/inst
 - 用户控制依赖内核的 `users` 白名单：当前 release（v0.5.1）会忽略该字段，需要 **Sudoku ≥ 0.5.2**（官方主线已合入、尚未发布），或启用 WARP 模式（自带的 sudoku-sing-box 已支持）。内核不支持时 dash 会明确提示，不会让你误以为限制已生效。
 - 添加第一个用户时会把安装时的默认密钥自动加为 `default` 用户，避免现有客户端被锁出。
 - 修改用户后需重启服务才生效（dash 会询问并代为重启）。
-- **按用户的实时数据来自内核的 RESTful API**（`external_controller`，Sudoku 主线新增，只读）。内核支持时，安装 / 升级会自动写入 `external_controller`（仅监听 `127.0.0.1` 的随机端口）和随机 `secret`；对已安装的机器，打开 dash →「用户」会询问是否一键启用。启用后 dash 显示：
+- **按用户的实时数据来自内核的 RESTful API**（`external_controller`，Sudoku 主线新增，只读）。内核支持时（直连模式的 Sudoku 主线，或 WARP 模式的新版 sudoku-sing-box，后者走其 Clash API 的 `/users`，格式一致），安装 / 升级会自动写入 `external_controller`（仅监听 `127.0.0.1` 的随机端口）和随机 `secret`；对已安装的机器，打开 dash →「用户」会询问是否一键启用。启用后 dash 显示：
   - 每个用户的 **在线 / 空闲 / 已封禁 / 已超额** 状态、连接数、实时下载 / 上传速率；
   - **本月已用流量**（线路字节，内核持久化到 `config.usage.json`，重启不丢，按服务器本地时间每月 1 日清零）、额度、剩余量、进度条与重置日期；
   - 本次运行累计流量；总览与「实时带宽」页也会列出各用户速率。
 - 额度（`data`，单位 GB，按 1 GB = 10⁹ 字节计）用完后内核会断开该用户现有连接并拒绝新连接；想提前清零某用户用量，停服务后删掉 `config.usage.json` 里对应条目即可。
-- 不支持的情况：WARP 模式（sudoku-sing-box 没有统计 API）与 v0.5.1 release 无实时数据，dash 只显示限速 / 额度 / 状态和日志统计的会话数，并在界面里说明原因。
+- WARP 模式同样支持：sudoku-sing-box 的用量与直连共用同一个 `config.usage.json`，两种模式来回切换用量不丢。该内核的 release tag 是原地覆盖重发的（tag 不变，二进制已更新），所以 `sudo sudoku-dash --upgrade`（或 dash →「版本管理」）会对比 GitHub 上的资产标识，发现新构建就刷新 sing-box，即使 Sudoku 版本没变。
+- 不支持的情况：v0.5.1 release、或旧版 sudoku-sing-box 构建无实时数据，dash 只显示限速 / 额度 / 状态和日志统计的会话数，并在界面里说明原因；运行 `sudo sudoku-dash --upgrade` 即可刷新 sing-box。
 
 ### 升级 / 卸载
 
@@ -230,12 +231,13 @@ curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-install/main/inst
 - User control relies on the kernel's `users` whitelist. The current release (v0.5.1) silently ignores it; you need **Sudoku ≥ 0.5.2** (merged upstream, not released yet) or WARP mode (the bundled sudoku-sing-box already supports it). On an unsupported kernel dash says so instead of pretending limits are active.
 - Adding the first user also adds your install-time key as user `default`, so existing clients are not locked out.
 - User changes need a service restart (dash offers to do it for you).
-- **Per-user live data comes from the kernel's RESTful API** (`external_controller`, read-only, new on Sudoku main). When the kernel supports it, install / upgrade writes `external_controller` (a random port on `127.0.0.1` only) plus a random `secret` into the config; on an existing install, open dash → Users and it offers to enable it in one step. Once on, dash shows:
+- **Per-user live data comes from the kernel's RESTful API** (`external_controller`, read-only, new on Sudoku main). When the kernel supports it (Sudoku main in direct mode, or the new sudoku-sing-box in WARP mode, which serves the same `/users` shape through its Clash API), install / upgrade writes `external_controller` (a random port on `127.0.0.1` only) plus a random `secret` into the config; on an existing install, open dash → Users and it offers to enable it in one step. Once on, dash shows:
   - each user's **online / idle / blocked / exceeded** state, connection count, and live download / upload rate;
   - **usage this month** (wire bytes, persisted by the kernel in `config.usage.json` so restarts don't lose it, reset on the 1st of each month in server local time), quota, remaining, a progress bar and the reset date;
   - totals since the process started; the overview and Live bandwidth screens list per-user rates too.
 - A user who uses up their quota (`data`, in GB, 1 GB = 10⁹ bytes) has live connections closed and new ones refused; to reset one user early, stop the service and delete their entry from `config.usage.json`.
-- Not available: WARP mode (sudoku-sing-box has no stats API) and the v0.5.1 release — dash then shows speed limits / quota / state plus log-derived session counts, and says why on screen.
+- WARP mode is covered too: sudoku-sing-box shares the same `config.usage.json` as direct mode, so usage survives switching between them. That kernel's release tag is re-published in place (same tag, newer binary), so `sudo sudoku-dash --upgrade` (or dash → Versions) compares the GitHub asset identity and refreshes sing-box when there is a new build, even if the Sudoku version is unchanged.
+- Not available: the v0.5.1 release or an older sudoku-sing-box build — dash then shows speed limits / quota / state plus log-derived session counts and says why on screen; `sudo sudoku-dash --upgrade` refreshes sing-box.
 
 ### Upgrade / uninstall
 

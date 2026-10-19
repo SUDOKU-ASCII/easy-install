@@ -1044,12 +1044,24 @@ install_sudoku_kernel() { # <tag>
         sudoku sudoku SUDOKU_VERSION "$1"
 }
 
+# The sudoku-sing-box release is re-published under the same tag, so the asset id/digest is what tells builds apart.
+sing_box_remote_info() { # [tag] -> "tag<TAB>asset-url<TAB>marker"
+    local tag="${1:-}" json line
+    [[ -n "${tag}" ]] || tag=$(get_latest_tag "${SING_BOX_REPO}") || return 1
+    json=$(gh_api "repos/${SING_BOX_REPO}/releases/tags/${tag}") || return 1
+    line=$(jq -r --arg p "^sing-box-.*-linux-${ARCH}\\.tar\\.gz\$" '
+        [.assets[]? | select(.name | test($p))][0] | select(. != null)
+        | "\(.browser_download_url)\t\(.id)-\(((.digest // .updated_at // "") | sub("^sha256:"; ""))[0:12])"' <<<"${json}" 2>/dev/null) || return 1
+    [[ -n "${line}" ]] || return 1
+    printf '%s\t%s\n' "${tag}" "${line}"
+}
+
 install_sing_box_kernel() { # [tag]
-    local tag="${1:-}" url
-    [[ -n "${tag}" ]] || tag=$(get_latest_tag "${SING_BOX_REPO}") || { echo "cannot resolve latest sudoku-sing-box release" >&2; return 1; }
-    url=$(latest_github_asset_url "${SING_BOX_REPO}" "^sing-box-.*-linux-${ARCH}\\.tar\\.gz\$" "${tag}") \
-        || { echo "no linux-${ARCH} asset in ${SING_BOX_REPO} ${tag}" >&2; return 1; }
-    install_from_archive "${url}" sing-box sudoku-sing-box SING_BOX_VERSION "${tag}"
+    local info tag url marker
+    info=$(sing_box_remote_info "${1:-}") || { echo "cannot resolve a linux-${ARCH} asset in ${SING_BOX_REPO} ${1:-latest}" >&2; return 1; }
+    IFS=$'\t' read -r tag url marker <<<"${info}"
+    install_from_archive "${url}" sing-box sudoku-sing-box SING_BOX_VERSION "${tag}" || return 1
+    ver_set SING_BOX_ASSET "${marker}"
 }
 
 ensure_wgcf_binary() {
@@ -2011,14 +2023,31 @@ PY
     "${INSTALL_DIR}/sudoku-sing-box" check -c "${SING_BOX_CONFIG_FILE}" 2>&1 || { echo "sudoku-sing-box WARP config validation failed: ${SING_BOX_CONFIG_FILE}" >&2; return 1; }
 }
 
-# Copy .users from a sudoku server config into the sudoku-in inbound of a sing-box config.
+# Does the installed sudoku-sing-box know usage persistence and the /users API?
+# `sing-box check` cannot tell (older builds accept the keys silently), so look for the option name in the binary.
+singbox_has_usage() {
+    [[ -x "${INSTALL_DIR}/sudoku-sing-box" ]] && LC_ALL=C grep -q usage_file "${INSTALL_DIR}/sudoku-sing-box" 2>/dev/null
+}
+
+# Derive the sudoku-in inbound (users, usage_file) and clash_api from the sudoku server config.
 sync_singbox_users() { # <sudoku-config> <singbox-config-to-patch>
-    local src="$1" dst="$2" tmp
+    local src="$1" dst="$2" tmp usage="" ctl="" secret=""
     [[ -f "${src}" && -f "${dst}" ]] || return 0
+    if singbox_has_usage; then
+        usage="${src%.json}.usage.json"
+        ctl=$(jq -r '.external_controller // ""' "${src}" 2>/dev/null) || ctl=""
+        secret=$(jq -r '.secret // ""' "${src}" 2>/dev/null) || secret=""
+    fi
     tmp=$(mktemp)
-    if ! jq --slurpfile c "${src}" '
+    if ! jq --slurpfile c "${src}" --arg usage "${usage}" --arg ctl "${ctl}" --arg secret "${secret}" '
         ($c[0].users // []) as $u
-        | .inbounds |= map(if .tag == "sudoku-in" then (if ($u | length) > 0 then .users = $u else del(.users) end) else . end)
+        | .inbounds |= map(if .tag == "sudoku-in" then
+            (if ($u | length) > 0 then .users = $u else del(.users) end)
+            | (if $usage != "" then .usage_file = $usage else del(.usage_file) end)
+          else . end)
+        | (if $ctl != "" then .experimental.clash_api = ({external_controller: $ctl} + (if $secret != "" then {secret: $secret} else {} end))
+           else del(.experimental.clash_api) end)
+        | (if (.experimental // {}) == {} then del(.experimental) else . end)
     ' "${dst}" >"${tmp}"; then
         rm -f "${tmp}"
         return 1
@@ -2395,6 +2424,7 @@ run_install() {
     if [[ "${WARP_ENABLED}" == "true" ]]; then
         remove_legacy_warp_tun_service
         ui_run "$(L '安装 sudoku-sing-box 内核' 'Installing sudoku-sing-box')" install_sing_box_kernel || die "$(L 'sudoku-sing-box 安装失败。' 'sudoku-sing-box installation failed.')"
+        API_CAP=""; api_auto_enable
         ui_run "$(L '注册 WARP 账户' 'Registering WARP account')" ensure_warp_profile || die "$(L 'WARP 注册失败。' 'WARP registration failed.')"
         ui_run "$(L '生成 WARP 出口配置' 'Writing WARP egress config')" write_sing_box_warp_config || die "$(L 'WARP 配置失败。' 'WARP config failed.')"
     fi
@@ -2464,28 +2494,86 @@ restore_backup() { # <binary-name> <version-key> [file]
     ver_set "${vkey}" "${ver}"
 }
 
+# After the sing-box binary changed: re-detect capabilities, enable the API if possible, rewrite and check its config.
+singbox_reconcile() {
+    local had
+    API_CAP=""; USERS_CAP=""
+    had=$(cfg_get .external_controller)
+    api_auto_enable
+    if [[ -z "${had}" && -n "$(cfg_get .external_controller)" ]]; then
+        info "$(L '已启用实时统计 API（仅 127.0.0.1）。' 'Enabled the live stats API (127.0.0.1 only).')"
+    fi
+    sync_singbox_users "${CONFIG_FILE}" "${SING_BOX_CONFIG_FILE}" || return 1
+    "${INSTALL_DIR}/sudoku-sing-box" check -c "${SING_BOX_CONFIG_FILE}" >/dev/null 2>&1
+}
+
 # upgrade_kernel <sudoku-tag> : download, migrate, restart; roll back automatically on failure.
 upgrade_kernel() {
-    local tag="$1" before
+    local tag="$1" before sb_new=0 had_api
     before=$(ver_get SUDOKU_VERSION)
     ui_run "$(L "下载 Sudoku ${tag}" "Downloading Sudoku ${tag}")" install_sudoku_kernel "${tag}" || return 1
     migrate_legacy_httpmask_config_inplace "${CONFIG_FILE}" || true
     if [[ "${WARP_ENABLED}" == "true" ]]; then
-        ui_run "$(L '更新 sudoku-sing-box' 'Updating sudoku-sing-box')" install_sing_box_kernel || warn "$(L 'sudoku-sing-box 更新失败，保留旧版本。' 'sudoku-sing-box update failed; keeping the old build.')"
-        sync_singbox_users "${CONFIG_FILE}" "${SING_BOX_CONFIG_FILE}" || true
-    fi
-    local had_api
-    had_api=$(cfg_get .external_controller)
-    api_auto_enable
-    if [[ -z "${had_api}" && -n "$(cfg_get .external_controller)" ]]; then
-        info "$(L '已启用实时统计 API（仅 127.0.0.1）。' 'Enabled the live stats API (127.0.0.1 only).')"
+        if ui_run "$(L '更新 sudoku-sing-box' 'Updating sudoku-sing-box')" install_sing_box_kernel; then
+            sb_new=1
+        else
+            warn "$(L 'sudoku-sing-box 更新失败，保留旧版本。' 'sudoku-sing-box update failed; keeping the old build.')"
+        fi
+        singbox_reconcile || warn "$(L 'sing-box 配置校验失败。' 'sing-box config check failed.')"
+    else
+        had_api=$(cfg_get .external_controller)
+        api_auto_enable
+        if [[ -z "${had_api}" && -n "$(cfg_get .external_controller)" ]]; then
+            info "$(L '已启用实时统计 API（仅 127.0.0.1）。' 'Enabled the live stats API (127.0.0.1 only).')"
+        fi
     fi
     if ui_run "$(L '重启服务' 'Restarting service')" svc_restart; then
         return 0
     fi
     err "$(L '新版本启动失败，正在回滚…' 'New version failed to start; rolling back…')"
     if restore_backup sudoku SUDOKU_VERSION; then
+        if ((sb_new)) && restore_backup sudoku-sing-box SING_BOX_VERSION; then
+            ver_set SING_BOX_ASSET ""
+            singbox_reconcile || true
+        fi
         svc_restart >/dev/null 2>&1 && ok "$(L "已回滚到 ${before:-旧版本}" "Rolled back to ${before:-the previous build}")"
+    fi
+    return 1
+}
+
+# Is a newer (or re-published same-tag) sudoku-sing-box available? Sets SB_REMOTE_TAG for display.
+SB_REMOTE_TAG=""
+sing_box_stale() {
+    local info url marker have
+    SB_REMOTE_TAG=""
+    [[ "${WARP_ENABLED}" == "true" ]] || return 1
+    info=$(sing_box_remote_info) || return 1
+    IFS=$'\t' read -r SB_REMOTE_TAG url marker <<<"${info}"
+    [[ "$(ver_get SING_BOX_VERSION)" == "${SB_REMOTE_TAG}" ]] || return 0
+    have=$(ver_get SING_BOX_ASSET)
+    if [[ -z "${have}" ]]; then
+        # Installed before assets were tracked: a build that already has the API is as new as it gets.
+        if singbox_has_usage; then ver_set SING_BOX_ASSET "${marker}"; return 1; fi
+        return 0
+    fi
+    [[ "${have}" != "${marker}" ]]
+}
+
+# Refresh only sudoku-sing-box (same tag may carry a rebuilt binary); roll back if the service will not start.
+refresh_sing_box() {
+    local before_marker
+    before_marker=$(ver_get SING_BOX_ASSET)
+    ui_run "$(L '更新 sudoku-sing-box' 'Updating sudoku-sing-box')" install_sing_box_kernel || return 1
+    singbox_reconcile || warn "$(L 'sing-box 配置校验失败。' 'sing-box config check failed.')"
+    if ui_run "$(L '重启服务' 'Restarting service')" svc_restart; then
+        ok "$(L '已更新 sudoku-sing-box。' 'sudoku-sing-box updated.')"
+        return 0
+    fi
+    err "$(L '新构建启动失败，正在回滚…' 'New build failed to start; rolling back…')"
+    if restore_backup sudoku-sing-box SING_BOX_VERSION; then
+        ver_set SING_BOX_ASSET "${before_marker}"
+        singbox_reconcile || true
+        svc_restart >/dev/null 2>&1 && ok "$(L '已回滚。' 'Rolled back.')"
     fi
     return 1
 }
@@ -2499,6 +2587,10 @@ cmd_upgrade() {
     [[ -n "${tag}" ]] || tag=$(get_latest_tag "${SUDOKU_REPO}") || die "$(L '无法获取最新版本。' 'Could not resolve the latest release.')"
     if [[ "$(ver_get SUDOKU_VERSION)" == "${tag}" ]]; then
         ok "$(L "已是最新版本 ${tag}" "Already on ${tag}")"
+        if sing_box_stale; then
+            info "$(L 'sudoku-sing-box 有新构建（同 tag 重新发布或新版本）。' 'A newer sudoku-sing-box build is available (re-published tag or new version).')"
+            refresh_sing_box || die "$(L '升级失败。' 'Upgrade failed.')"
+        fi
     else
         upgrade_kernel "${tag}" || die "$(L '升级失败。' 'Upgrade failed.')"
     fi
@@ -2660,11 +2752,13 @@ declare -A API_BY_NAME=()
 API_ROW=""
 R_NAME="" R_BLOCKED="" R_EXCEEDED="" R_CONNS=0 R_UP=0 R_DOWN=0 R_UPT=0 R_DOWNT=0 R_USED=0 R_LIMIT=0
 
-# Does the installed kernel know `external_controller`? Older ones ignore unknown keys; newer ones validate it.
+# Does the active kernel have the stats API? Direct: sudoku validates `external_controller`; WARP: sudoku-sing-box has usage_file.
 controller_capable() {
     if [[ -n "${API_CAP}" ]]; then [[ "${API_CAP}" == "yes" ]]; return $?; fi
     API_CAP="no"
-    if [[ "${WARP_ENABLED}" != "true" && -x "${INSTALL_DIR}/sudoku" && -f "${CONFIG_FILE}" ]]; then
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        singbox_has_usage && API_CAP="yes"
+    elif [[ -x "${INSTALL_DIR}/sudoku" && -f "${CONFIG_FILE}" ]]; then
         local tmp out
         tmp=$(mktemp)
         if jq '.external_controller = "zz"' "${CONFIG_FILE}" >"${tmp}" 2>/dev/null; then
@@ -2773,7 +2867,7 @@ api_offer_enable() { # once per dash session, from the Users screen
     info "$(L '内核支持实时统计 API：可按用户显示在线状态、实时速率和本月已用流量。' 'The kernel has a stats API: per-user online state, live rates and this month'\''s usage.')"
     ui_confirm "$(L '启用？（仅监听 127.0.0.1，随机端口与令牌；需重启服务）' 'Enable it? (127.0.0.1 only, random port and token; restarts the service)')" y || return 0
     if api_enable; then
-        ui_run "$(L '重启服务' 'Restarting service')" svc_restart || warn "$(L '重启失败，请到主菜单重启。' 'Restart failed; restart from the main menu.')"
+        ui_run "$(L '应用并重启服务' 'Applying and restarting')" users_apply || warn "$(L '重启失败，请到主菜单重启。' 'Restart failed; restart from the main menu.')"
     else
         err "$(L '写入配置失败，已回滚。' 'Failed to write config; rolled back.')"
     fi
@@ -3111,10 +3205,12 @@ user_detail() { # <index>
 
 # Why per-user live numbers are missing right now.
 api_hint() {
-    if [[ "${WARP_ENABLED}" == "true" ]]; then
-        L '提示: WARP 模式（sudoku-sing-box）没有统计 API，这里仅显示日志统计；切回直连模式可获得实时数据。' 'Note: WARP mode (sudoku-sing-box) has no stats API, so only log-derived counts are shown; switch to direct mode for live data.'
-    elif ! controller_capable; then
-        L '提示: 当前内核没有统计 API（需要带 external_controller 的 Sudoku，当前 release v0.5.1 尚不含）。' 'Note: this kernel has no stats API (needs a Sudoku build with external_controller; release v0.5.1 predates it).'
+    if ! controller_capable; then
+        if [[ "${WARP_ENABLED}" == "true" ]]; then
+            L '提示: 当前 sudoku-sing-box 构建不含统计 API / 用量持久化（同一 tag 已重新发布），运行 sudoku-dash --upgrade 刷新。' 'Note: this sudoku-sing-box build has no stats API / usage persistence (the release was re-published under the same tag); run sudoku-dash --upgrade to refresh it.'
+        else
+            L '提示: 当前内核没有统计 API（需要带 external_controller 的 Sudoku，当前 release v0.5.1 尚不含）。' 'Note: this kernel has no stats API (needs a Sudoku build with external_controller; release v0.5.1 predates it).'
+        fi
     elif [[ -z "$(cfg_get .external_controller)" ]]; then
         L '提示: 统计 API 未启用，进入「用户」页面可一键启用。' 'Note: the stats API is off; open the Users screen to enable it.'
     elif ! svc_is_active; then
@@ -3494,7 +3590,7 @@ pick_version_screen() {
 }
 
 versions_screen() {
-    local cur latest dash_remote
+    local cur latest dash_remote sb_stale=0
     while :; do
         ui_clear
         info "$(L '检查更新…' 'Checking for updates…')"
@@ -3505,8 +3601,13 @@ versions_screen() {
         box_top "$(L '版本管理' 'Versions')"
         kv "Sudoku" "${cur:-$(L '未知（由旧脚本安装）' 'unknown (installed by an older script)')}"
         kv "$(L '最新 release' 'Latest release')" "${latest:-$(L '获取失败' 'unavailable')}$([[ -n "${latest}" && "${latest}" != "${cur}" ]] && printf '  %s%s%s' "${C_WARN}" "$(L '← 可升级' '← update available')" "${C_RESET}")"
-        if [[ "${WARP_ENABLED}" == "true" ]]; then kv "sing-box" "$(ver_get SING_BOX_VERSION)"; fi
+        sb_stale=0
+        if [[ "${WARP_ENABLED}" == "true" ]]; then
+            if sing_box_stale; then sb_stale=1; fi
+            kv "sing-box" "$(ver_get SING_BOX_VERSION)$( ((sb_stale)) && printf '  %s%s%s' "${C_WARN}" "$(L '← 有新构建' '← newer build available')" "${C_RESET}")"
+        fi
         kv "$(L '用户控制' 'User control')" "$(users_capable && L '支持' 'supported' || L '当前内核不支持（需 ≥ 0.5.2）' 'not in this build (needs ≥ 0.5.2)')"
+        kv "$(L '统计 API / 持久化' 'Stats API / usage')" "$(controller_capable && L '支持' 'supported' || L '当前内核不支持' 'not in this build')"
         kv "dash" "v${DASH_VERSION}$([[ -n "${dash_remote}" && "${dash_remote}" != "${DASH_VERSION}" ]] && printf '  %s→ v%s%s' "${C_WARN}" "${dash_remote}" "${C_RESET}")"
         box_bottom
         printf '\n'
@@ -3515,7 +3616,9 @@ versions_screen() {
         case "${MENU_SEL}" in
             0)
                 if [[ -z "${latest}" ]]; then err "$(L '无法获取最新版本。' 'Could not resolve latest release.')"
-                elif [[ "${latest}" == "${cur}" ]]; then ok "$(L '已是最新版本。' 'Already up to date.')"
+                elif [[ "${latest}" == "${cur}" ]]; then
+                    if ((sb_stale)); then refresh_sing_box && USERS_CAP=""
+                    else ok "$(L '已是最新版本。' 'Already up to date.')"; fi
                 else upgrade_kernel "${latest}" && USERS_CAP=""; fi
                 ui_pause ;;
             1) pick_version_screen ;;
@@ -3599,6 +3702,7 @@ toggle_warp() {
     else
         ui_confirm "$(L '启用 Cloudflare WARP 出口？' 'Enable Cloudflare WARP egress?')" y || return 0
         ui_run "$(L '安装 sudoku-sing-box 内核' 'Installing sudoku-sing-box')" install_sing_box_kernel || return 1
+        API_CAP=""; api_auto_enable
         ui_run "$(L '注册 WARP 账户' 'Registering WARP account')" ensure_warp_profile || return 1
         remove_legacy_warp_tun_service
         ui_run "$(L '生成 WARP 出口配置' 'Writing WARP egress config')" write_sing_box_warp_config || return 1
@@ -3606,7 +3710,7 @@ toggle_warp() {
         ui_run "$(L '切换为 WARP 并重启' 'Switching to WARP mode')" start_and_wait || { err "$(L '启动失败。' 'Failed to start.')"; WARP_ENABLED="false"; create_service >/dev/null 2>&1; return 1; }
     fi
     mark_applied
-    USERS_CAP=""
+    USERS_CAP=""; API_CAP=""
 }
 
 settings_screen() {
